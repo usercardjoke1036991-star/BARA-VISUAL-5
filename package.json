@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
+    "test": "node --test bara-logic.test.js",
     "build": "echo 'Build OK'",
     "lint": "echo 'Lint OK'"
   },

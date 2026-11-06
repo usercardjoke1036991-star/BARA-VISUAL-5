@@ -78,7 +78,11 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .field {
   width: 100%; background: #0d1218; border: 1px solid var(--border);
-  border-radius: 8px; padding: 8px 12px; color: var(--text); outline: none; font-size: 14px;
+  border-radius: 8px; padding: 8px 12px; color: var(--text); font-size: 14px;
+}
+.field:focus, .field:focus-visible {
+  outline: 2px solid var(--green-soft);
+  outline-offset: 2px;
 }
 .field::placeholder { color: var(--muted); }
 .label { font-size: 14px; color: var(--muted); margin-bottom: 6px; display: block; }
@@ -221,17 +225,26 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   order: 2; border-right: none !important;
 }
 
-/* 3. Pastilla verde «kernel activo» y contador de total Σ N con tooltip en la barra de estado */
-.status { overflow: visible; }
+/* 3. Pastilla verde «kernel activo», truncado en anchos estrechos y contador Σ N con tooltip propio */
+.status { overflow: visible; white-space: nowrap; }
+.status-item { white-space: nowrap; }
+.status-truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1120px) {
+  .status { gap: 8px; padding: 0 8px; }
+  .status-truncate { max-width: 175px; }
+}
 .status-pill-green {
   display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px;
   background: #17261b; border: 1px solid #2a4a32; color: var(--green-soft);
-  font-size: 13px; font-weight: 500;
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.chip-muted {
+  background: #182028; color: var(--muted); border: 1px solid var(--border);
 }
 .status-total-counter {
   position: relative; cursor: pointer; color: var(--text); font-weight: 600;
   display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px;
-  background: #141c24; border: 1px solid var(--border);
+  background: #141c24; border: 1px solid var(--border); flex-shrink: 0;
 }
 .status-total-counter:hover, .status-total-counter:focus-visible {
   border-color: var(--green-mid); color: var(--green-soft);
@@ -248,16 +261,52 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   display: inline-block;
 }
 
-/* 6. Diagnósticos en el editor (subrayado ondulado + tooltip) */
+/* 6. Diagnósticos en el editor (error en rojo, aviso en amarillo, info en azul/gris tenue) */
 .diag-token { cursor: pointer; position: relative; border-radius: 2px; }
 .diag-error { text-decoration: underline wavy #c45c5c; text-underline-offset: 3px; }
 .diag-warn { text-decoration: underline wavy #c9a227; text-underline-offset: 3px; }
+.diag-info { text-decoration: underline wavy #6ca0dc; text-underline-offset: 3px; }
+.gutter-warn { color: #c9a227; font-weight: 700; }
+.gutter-info { color: #6ca0dc; font-weight: 700; }
 .code-line-active { background: rgba(115, 151, 113, 0.14); border-radius: 3px; }
+.code-line-highlight { background: rgba(115, 151, 113, 0.24); border-radius: 3px; }
+.editor-cursor {
+  display: inline-block; width: 2px; height: 15px; background: var(--green-soft);
+  vertical-align: text-bottom; margin-left: 1px;
+}
 .diag-tooltip-row {
   display: inline-flex; align-items: center; gap: 6px;
   margin: 2px 0 4px 14px; padding: 2px 8px; border-radius: 5px;
   font-family: var(--font); font-size: 14px; white-space: normal;
-  background: #2a1515; border: 1px solid #6a3030; color: #f0b0b0;
+  background: #151c24; border: 1px solid var(--border); color: var(--text);
+}
+.diag-tooltip-row.sev-error { background: #2a1515; border-color: #6a3030; color: #f0b0b0; }
+.diag-tooltip-row.sev-aviso { background: #2a2210; border-color: #6a4a20; color: #e8c070; }
+.diag-tooltip-row.sev-info { background: #132230; border-color: #2f5578; color: #b8d8f8; }
+
+/* Panel Problemas interactivo: filas navegables y tooltip de mensaje completo */
+.problem-row {
+  position: relative;
+}
+.problem-row:hover, .problem-row:focus-visible, .problem-row.selected-row {
+  background: var(--hover);
+}
+.problem-msg-wrap {
+  position: relative; min-width: 0; display: flex; align-items: center;
+}
+.problem-msg-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; width: 100%;
+}
+.problem-msg-tooltip {
+  display: none; position: absolute; bottom: calc(100% + 4px); left: 0;
+  background: #101419; border: 1px solid var(--green-mid); color: var(--text);
+  padding: 4px 10px; border-radius: 6px; font-size: 14px; white-space: nowrap;
+  z-index: 9999; pointer-events: none;
+}
+.problem-row:hover .problem-msg-tooltip,
+.problem-row:focus-visible .problem-msg-tooltip,
+.problem-row.show-msg-tooltip .problem-msg-tooltip {
+  display: inline-block;
 }
 
 /* 7. Menú » («Más pestañas») en portal sobre document.body */
@@ -275,8 +324,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background: var(--hover); color: var(--green-soft);
 }
 
-/* 8. Toggle activo en Ajustes (Modo estricto / Autoguardado) */
+/* 8. Toggle activo en Ajustes (Offline / GGUF / Modo estricto / Autoguardado) */
 .toggle { cursor: pointer; padding: 0; }
 .toggle.on { background: var(--green-dim); border-color: var(--green-mid); }
 .toggle.on::after { left: 20px; background: #fff; }
+
 

@@ -1,16 +1,15 @@
 /**
- * Bara IDE — AETHER-Ω (v0.5.0)
+ * Bara IDE (v0.5.0)
  * Pure logic module for BARA-VISUAL-5:
- * - Version & file constants
+ * - Version & trusted folder constants
  * - Hidden advanced components config (showAdvanced = false)
- * - Coherent single source of truth for Problems & counters
- * - TokenKind::Diagnostic tokenizer & validators (3-consonant root, number, unclosed string)
+ * - Coherent single source of truth for Problems (error, aviso, info) & counters
+ * - Interactive Problems filtering & Registros filtering (level + text)
  * - Strict mode gating for unverified changes
  * - GitHub URL validation for error banner
  */
 
 export const APP_VERSION = 'v0.5.0';
-export const OPEN_FILE_PATH = 'samples/genesis.bara';
 export const DEFAULT_TRUSTED_FOLDER = 'C:/Users/Vexor/Downloads/bara-ide';
 export const ERROR_BANNER_TEXT = 'Sólo se aceptan URL https o ssh de github.com';
 
@@ -43,16 +42,31 @@ export const HIDDEN_ADVANCED_COMPONENTS = {
 };
 
 export const MORE_TABS_ITEMS = [
-  { id: 'bilattice', label: 'Bilattice', description: 'Retículo lógico de cuatro valores (⊤, ⊥, Ambos, Ninguno)' },
-  { id: 'telemetria', label: 'Telemetría', description: 'Latencia de inferencia y tiempos de verificación local' },
-  { id: 'topologia', label: 'Topología', description: 'Grafo de dependencias y contratos del módulo' },
-  { id: 'ledger', label: 'Ledger', description: 'Registro criptográfico de firmas y parches aplicados' },
-  { id: 'lienzo', label: 'Lienzo', description: 'Vista rápida de nodos fuente → transformar → guardia → sumidero' },
-  { id: 'nucleo', label: 'Núcleo', description: 'Estado interno del verificador formal Bara v0.5.0' }
+  { id: 'bilattice', label: 'Bilattice', description: 'Retículo lógico de cuatro valores (⊤, ⊥, Ambos, Ninguno)', advanced: true },
+  { id: 'telemetria', label: 'Telemetría', description: 'Latencia de inferencia y tiempos de verificación local', advanced: true },
+  { id: 'topologia', label: 'Topología', description: 'Grafo de dependencias y contratos del módulo', advanced: false },
+  { id: 'ledger', label: 'Ledger', description: 'Registro criptográfico de firmas y parches aplicados', advanced: true },
+  { id: 'lienzo', label: 'Lienzo', description: 'Vista rápida de nodos fuente → transformar → guardia → sumidero', advanced: false },
+  { id: 'nucleo', label: 'Núcleo', description: 'Estado interno del verificador formal Bara v0.5.0', advanced: true }
 ];
 
 /**
- * Single source of truth for IDE problems (barra de estado, contador ⚠ N y panel Problemas).
+ * Returns the tabs shown inside the » («Más pestañas») menu.
+ * While showAdvanced = false, Bilattice, Telemetría, Ledger and Núcleo stay hidden.
+ */
+export function getVisibleMoreTabs(showAdvanced = false) {
+  const baseTabs = [
+    { id: 'problemas', label: 'Problemas', advanced: false },
+    { id: 'registros', label: 'Registros', advanced: false },
+    { id: 'terminal', label: 'Terminal kernel', advanced: false }
+  ];
+  const extraTabs = MORE_TABS_ITEMS.filter(item => Boolean(showAdvanced) || !item.advanced);
+  return [...baseTabs, ...extraTabs];
+}
+
+/**
+ * Single source of truth for IDE problems (barra de estado, contador Σ N y panel Problemas).
+ * Restored to VISUAL-4 levels: 1 aviso, 1 error, 1 info.
  */
 export const INITIAL_PROBLEMS = [
   {
@@ -80,7 +94,7 @@ export const INITIAL_PROBLEMS = [
     col: 3,
     location: 'HELLO.bara:2:3',
     message: 'Variable x sin anotación de tipo',
-    severity: 'error'
+    severity: 'info'
   }
 ];
 
@@ -89,6 +103,7 @@ export function computeProblemsSummary(problemsList) {
   const total = list.length;
   const warnings = list.filter(p => p.severity === 'aviso').length;
   const errors = list.filter(p => p.severity === 'error').length;
+  const infos = list.filter(p => p.severity === 'info').length;
   const probWord = total === 1 ? 'problema' : 'problemas';
   const warnWord = warnings === 1 ? 'aviso' : 'avisos';
   const errWord = errors === 1 ? 'error' : 'errores';
@@ -96,128 +111,47 @@ export function computeProblemsSummary(problemsList) {
     total,
     warnings,
     errors,
-    statusText: `${total} ${probWord} · ⚠ ${warnings} ${warnWord} · ✖ ${errors} ${errWord}`,
+    infos,
+    statusText: `${total} ${probWord} · ⚠ ${warnings} ${warnWord} · ✖ ${errors} ${errWord} · ℹ ${infos} info`,
     badgeText: `Σ ${total}`,
-    totalTooltip: `${total} ${probWord} en total (${warnings} ${warnWord}, ${errors} ${errWord})`
-  };
-}
-
-const VOWELS = new Set(['a', 'e', 'i', 'o', 'u', 'á', 'é', 'í', 'ó', 'ú']);
-
-/**
- * Validates a Bara triliteral root (e.g. @ktb is valid; @kt or @ktbl is invalid).
- * A valid root must have exactly 3 consonants.
- */
-export function validateBaraRoot(rawRoot) {
-  const cleaned = String(rawRoot || '').replace(/^@/, '').trim().toLowerCase();
-  const letters = [...cleaned].filter(ch => /[a-zñáéíóú]/i.test(ch));
-  const consonants = letters.filter(ch => !VOWELS.has(ch));
-  if (consonants.length !== 3 || letters.length !== 3) {
-    return {
-      valid: false,
-      kind: 'Diagnostic',
-      severity: 'error',
-      message: 'Raíz inválida: debe tener exactamente 3 consonantes'
-    };
-  }
-  return { valid: true, kind: 'Root', severity: null, message: null };
-}
-
-/**
- * Validates a numeric literal in Bara (e.g. "10" or "0.2" valid; "1.2.3" invalid).
- */
-export function validateBaraNumber(rawNumber) {
-  const str = String(rawNumber || '').trim();
-  if (/^\d+(\.\d+)?$/.test(str)) {
-    return { valid: true, kind: 'Number', severity: null, message: null };
-  }
-  return {
-    valid: false,
-    kind: 'Diagnostic',
-    severity: 'error',
-    message: 'Número inválido'
+    totalTooltip: `${total} ${probWord} en total (${warnings} ${warnWord}, ${errors} ${errWord}, ${infos} info)`
   };
 }
 
 /**
- * Checks whether a line has an unclosed string literal.
- * Cuts off at the line break so subsequent lines continue coloring normally.
+ * Filters activeProblems by severity chip ('todos' | 'error' | 'aviso' | 'info').
  */
-export function detectUnclosedStringInLine(lineText) {
-  let inString = false;
-  let startCol = -1;
-  for (let i = 0; i < lineText.length; i++) {
-    const ch = lineText[i];
-    const prev = i > 0 ? lineText[i - 1] : '';
-    if (ch === '"' && prev !== '\\') {
-      if (!inString) {
-        inString = true;
-        startCol = i + 1;
-      } else {
-        inString = false;
-        startCol = -1;
-      }
+export function filterProblems(problemsList, severityFilter = 'todos') {
+  const list = Array.isArray(problemsList) ? problemsList : [];
+  const norm = String(severityFilter || 'todos').toLowerCase();
+  if (norm === 'todos' || norm === 'todo') return list;
+  return list.filter(p => p.severity === norm);
+}
+
+/**
+ * Filters Registros by level chip ('todo' | 'errores' | 'avisos' | 'info') and search text.
+ */
+export function filterRegistros(registrosList, levelFilter = 'todo', queryText = '') {
+  const list = Array.isArray(registrosList) ? registrosList : [];
+  const normLevel = String(levelFilter || 'todo').toLowerCase();
+  const q = String(queryText || '').trim().toLowerCase();
+
+  return list.filter(entry => {
+    const entryLevel = String(entry.level || '').toUpperCase();
+    let matchesLevel = true;
+    if (normLevel === 'errores' || normLevel === 'error') {
+      matchesLevel = entryLevel === 'ERROR';
+    } else if (normLevel === 'avisos' || normLevel === 'aviso') {
+      matchesLevel = entryLevel === 'AVISO';
+    } else if (normLevel === 'info') {
+      matchesLevel = entryLevel === 'INFO';
     }
-  }
-  if (inString) {
-    return {
-      hasUnclosed: true,
-      kind: 'Diagnostic',
-      severity: 'warn',
-      column: startCol,
-      token: lineText.slice(startCol - 1),
-      message: 'Cadena sin cerrar'
-    };
-  }
-  return { hasUnclosed: false, kind: null, severity: null, column: -1, token: null, message: null };
+    if (!matchesLevel) return false;
+    if (!q) return true;
+    const haystack = `${entry.time || ''} [${entryLevel}] ${entry.text || ''}`.toLowerCase();
+    return haystack.includes(q);
+  });
 }
-
-export const GENESIS_BARA_LINES = [
-  '// samples/genesis.bara — módulo principal v0.5.0',
-  'raiz @ktbl ContratoGenesis {',
-  '  funcion iniciar() {',
-  '    variables version_num = 1.2.3',
-  '    variables saludo = "Bienvenido a Bara IDE',
-  '    si version_num > 1 {',
-  '      mostrar("kernel activo")',
-  '      registrar("genesis listo")',
-  '    }',
-  '  }',
-  '}'
-];
-
-export const BARA_DIAGNOSTICS = [
-  {
-    id: 'diag-root',
-    file: OPEN_FILE_PATH,
-    line: 2,
-    column: 6,
-    token: '@ktbl',
-    severity: 'error',
-    kind: 'TokenKind::Diagnostic',
-    message: 'Raíz inválida: debe tener exactamente 3 consonantes'
-  },
-  {
-    id: 'diag-num',
-    file: OPEN_FILE_PATH,
-    line: 4,
-    column: 29,
-    token: '1.2.3',
-    severity: 'error',
-    kind: 'TokenKind::Diagnostic',
-    message: 'Número inválido'
-  },
-  {
-    id: 'diag-str',
-    file: OPEN_FILE_PATH,
-    line: 5,
-    column: 24,
-    token: '"Bienvenido a Bara IDE',
-    severity: 'warn',
-    kind: 'TokenKind::Diagnostic',
-    message: 'Cadena sin cerrar'
-  }
-];
 
 /**
  * Computes whether the "Aceptar" button on a proposed change must be disabled.

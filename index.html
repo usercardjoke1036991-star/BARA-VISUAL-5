@@ -138,21 +138,21 @@
   <!-- Canonical Status Bar: conserva TODO lo de VISUAL-4 + contadores coherentes + «kernel activo» y «v0.5.0» -->
   <footer class="status">
     <span class="ok">●</span>
-    <span>main</span>
+    <span class="status-item" title="Rama actual: main">main</span>
     <span class="sep">|</span>
-    <span id="status-problemas-trigger" role="button" tabindex="0" style="cursor: pointer;" title="Mostrar/Ocultar panel Problemas (Ctrl+J)">3 problemas · ⚠ 1 aviso · ✖ 2 errores</span>
+    <span id="status-problemas-trigger" class="status-item status-truncate" role="button" tabindex="0" style="cursor: pointer;" title="3 problemas · ⚠ 1 aviso · ✖ 1 error · ℹ 1 info">3 problemas · ⚠ 1 aviso · ✖ 1 error · ℹ 1 info</span>
     <span class="sep">|</span>
-    <span id="status-diag-counter" class="status-total-counter" role="button" tabindex="0" aria-label="3 problemas en total (1 aviso, 2 errores)" title="3 problemas en total (1 aviso, 2 errores)">
+    <span id="status-diag-counter" class="status-total-counter" role="button" tabindex="0" aria-label="3 problemas en total (1 aviso, 1 error, 1 info)">
       <span id="status-diag-text">Σ 3</span>
-      <span id="status-total-tooltip" class="status-total-tooltip" role="tooltip">3 problemas en total (1 aviso, 2 errores)</span>
+      <span id="status-total-tooltip" class="status-total-tooltip" role="tooltip">3 problemas en total (1 aviso, 1 error, 1 info)</span>
     </span>
     <span class="sep">|</span>
-    <span class="mono">kernel fa3d308</span>
+    <span class="mono status-item status-truncate" title="kernel fa3d308">kernel fa3d308</span>
     <span class="sep">|</span>
-    <span>DeepSeek · deepseek-chat</span>
-    <span style="margin-left:auto; display:inline-flex; align-items:center; gap:10px;">
-      <span class="status-pill-green">kernel activo</span>
-      <span class="mono" id="status-version-tag">v0.5.0</span>
+    <span class="status-item status-truncate" title="DeepSeek · deepseek-chat">DeepSeek · deepseek-chat</span>
+    <span style="margin-left:auto; display:inline-flex; align-items:center; gap:10px; flex-shrink:0;">
+      <span class="status-pill-green" title="Estado del kernel: kernel activo">kernel activo</span>
+      <span class="mono" id="status-version-tag" title="Versión v0.5.0">v0.5.0</span>
     </span>
   </footer>
 </div>

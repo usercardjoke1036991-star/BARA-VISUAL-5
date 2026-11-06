@@ -10,8 +10,11 @@ import {
   HIDDEN_ADVANCED_COMPONENTS,
   ERROR_BANNER_TEXT,
   MORE_TABS_ITEMS,
+  getVisibleMoreTabs,
   INITIAL_PROBLEMS,
   computeProblemsSummary,
+  filterProblems,
+  filterRegistros,
   computeAcceptButtonState,
   validateGithubUrl
 } from './bara-logic.js';
@@ -38,23 +41,32 @@ const SVG = {
 // BARA-VISUAL-5 Additive State
 let showAdvanced = SHOW_ADVANCED_DEFAULT;
 let editorFirst = false;
+let offlineMode = false;
+let ggufMode = false;
 let strictMode = false;
 let autosave = true;
 let rememberKey = false; // DESMARCADO por defecto
 let trustedFolder = DEFAULT_TRUSTED_FOLDER;
 let aiProvider = 'DeepSeek';
 let errorBannerVisible = false;
+let activeEditorFile = 'HELLO.bara';
 let activeDiagLine = null;
+let highlightedLine = null;
+let highlightLineTimer = null;
+let activeProblemsFilter = 'todos';
+let registrosLevelFilter = 'todo';
+let registrosSearchQuery = '';
 let moreTabsOpen = false;
 let unverifiedAccepted = false;
+let unverifiedRejected = false;
 let unverifiedAcceptedTimestamp = '2026-11-06_1033';
 let reviewCardVerified = false;
 let gitRemoteUrl = 'https://gitlab.com/vexor/genesis_engine.git';
 
-// Un solo origen de datos para los problemas (barra de estado, contador ⚠ N y panel Problemas)
+// Un solo origen de datos para los problemas (barra de estado, contador Σ N y panel Problemas)
 let activeProblems = INITIAL_PROBLEMS.map(p => ({ ...p }));
 
-// Registros dinámicos: conserva todos los de VISUAL-4 y añade la nueva línea tras aceptar el cambio
+// Registros dinámicos: conserva todos los de VISUAL-4 y añade líneas de Aceptar / Deshacer / Rechazar sin borrar previas
 const BASE_REGISTROS = [
   { time: '10:31:02', level: 'INFO', color: 'var(--green-soft)', text: 'Carpeta abierta: genesis_engine' },
   { time: '10:31:04', level: 'INFO', color: 'var(--green-soft)', text: 'Kernel conectado · fa3d308' },
@@ -66,17 +78,10 @@ const BASE_REGISTROS = [
   { time: '10:32:30', level: 'AVISO', color: '#c9a227', text: 'Archivo .env detectado · excluido del commit' }
 ];
 
+let appendedRegistros = [];
+
 function getActiveRegistros() {
-  const list = [...BASE_REGISTROS];
-  if (unverifiedAccepted) {
-    list.push({
-      time: '10:33:00',
-      level: 'INFO',
-      color: 'var(--green-soft)',
-      text: `Cambio aceptado en HELLO.bara · respaldo ${unverifiedAcceptedTimestamp}`
-    });
-  }
-  return list;
+  return [...BASE_REGISTROS, ...appendedRegistros];
 }
 
 try {
@@ -146,13 +151,14 @@ const COMPOSER_HTML = `<div style="padding:10px 12px;border-top:1px solid var(--
 </div>`;
 
 function buildTabbar(unsavedDot = true) {
+  const isHello = activeEditorFile !== 'genesis.bara';
   return `<div class="tabbar">
-    <div class="tab active">
+    <div class="tab ${isHello ? 'active' : ''}" role="tab" tabindex="0" data-editor-tab="HELLO.bara" style="cursor:pointer">
       <span>HELLO.bara</span>
       ${unsavedDot ? '<span class="dot" title="Sin guardar"></span>' : ''}
       <button type="button" class="x" aria-label="Cerrar pestaña HELLO.bara">${SVG.close(14)}</button>
     </div>
-    <div class="tab">
+    <div class="tab ${!isHello ? 'active' : ''}" role="tab" tabindex="0" data-editor-tab="genesis.bara" style="cursor:pointer">
       <span>genesis.bara</span>
       <button type="button" class="x" aria-label="Cerrar pestaña genesis.bara">${SVG.close(14)}</button>
     </div>
@@ -160,35 +166,79 @@ function buildTabbar(unsavedDot = true) {
   </div>`;
 }
 
-// 5. NO CAMBIAR: El código del editor de VISUAL-4 (funcion / variables / si) se queda igual (6 líneas), con subrayado ondulado + tooltip
+// C.6: El código del editor de VISUAL-4 (6 líneas en HELLO.bara: línea 2 en info azul/gris, línea 4 en aviso amarillo .diag-warn; y soporte de salto a genesis.bara:12 en error rojo)
 function buildEditorWithDiagnosticsHtml() {
+  const lineClass = (lineNum) => {
+    const classes = [];
+    if (activeDiagLine === lineNum) classes.push('code-line-active');
+    if (highlightedLine === lineNum) classes.push('code-line-highlight');
+    return classes.join(' ');
+  };
+  const cursorHtml = (lineNum) => activeDiagLine === lineNum
+    ? '<span class="editor-cursor" aria-hidden="true"></span>'
+    : '';
+
+  if (activeEditorFile === 'genesis.bara') {
+    const hasLine12Prob = activeProblems.some(p => p.file === 'genesis.bara' && p.line === 12);
+    const gutterRows = [
+      '<div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div><div>8</div><div>9</div><div>10</div><div>11</div>',
+      hasLine12Prob ? '<div class="gutter-err" title="ContratoA no resuelto en alcance">●</div>' : '<div>12</div>',
+      activeDiagLine === 12 ? '<div>·</div>' : '',
+      '<div>13</div><div>14</div>'
+    ].join('');
+
+    const diag12 = activeDiagLine === 12
+      ? '<div><span class="diag-tooltip-row sev-error" role="status">✖ ContratoA no resuelto en alcance (genesis.bara:12:1)</span></div>'
+      : '';
+
+    const bodyRows = [
+      '<div data-line="1">// src/genesis.bara</div>',
+      '<div data-line="2">modulo genesis_engine {</div>',
+      '<div data-line="3">  tipo TipoRuta = texto</div>',
+      '<div data-line="4">  variables ruta_base = "~/proyectos"</div>',
+      '<div data-line="5">  funcion validar_entorno() {</div>',
+      '<div data-line="6">    mostrar("Verificando entorno")</div>',
+      '<div data-line="7">    devolver verdadero</div>',
+      '<div data-line="8">  }</div>',
+      '<div data-line="9">  funcion conectar_kernel() {</div>',
+      '<div data-line="10">    registrar("kernel fa3d308")</div>',
+      '<div data-line="11">  }</div>',
+      `<div class="${lineClass(12)}" data-line="12"><span class="${hasLine12Prob ? 'diag-token diag-error' : ''}" tabindex="0" role="button" data-diag-file="genesis.bara" data-diag-line="12" title="ContratoA no resuelto en alcance">ContratoA</span> :: verificar_firma()${cursorHtml(12)}</div>`,
+      diag12,
+      '<div data-line="13">  exportar validar_entorno</div>',
+      '<div data-line="14">}</div>'
+    ].join('');
+
+    return `<div class="code"><div class="gutter">${gutterRows}</div><div class="code-body">${bodyRows}</div></div>`;
+  }
+
   const hasLine2Prob = activeProblems.some(p => p.file === 'HELLO.bara' && p.line === 2);
   const hasLine4Prob = activeProblems.some(p => p.file === 'HELLO.bara' && p.line === 4);
 
   const gutterRows = [
     '<div>1</div>',
-    hasLine2Prob ? '<div class="gutter-err" title="Variable x sin anotación de tipo">●</div>' : '<div>2</div>',
+    hasLine2Prob ? '<div class="gutter-info" title="Variable x sin anotación de tipo (info)">●</div>' : '<div>2</div>',
     activeDiagLine === 2 ? '<div>·</div>' : '',
     '<div>3</div>',
-    hasLine4Prob ? '<div class="gutter-err" title="Identificador \'mostrar\' — aviso de firma">●</div>' : '<div>4</div>',
+    hasLine4Prob ? '<div class="gutter-warn" title="Identificador \'mostrar\' — aviso de firma">●</div>' : '<div>4</div>',
     activeDiagLine === 4 ? '<div>·</div>' : '',
     '<div>5</div>',
     '<div>6</div>'
   ].join('');
 
-  const diagTooltip = (lineNum, text) => activeDiagLine === lineNum
-    ? `<div><span class="diag-tooltip-row" role="status">⚠ ${text}</span></div>`
+  const diagTooltip = (lineNum, sev, icon, text) => activeDiagLine === lineNum
+    ? `<div><span class="diag-tooltip-row sev-${sev}" role="status">${icon} ${text}</span></div>`
     : '';
 
   const bodyRows = [
-    `<div class="${activeDiagLine === 1 ? 'code-line-active' : ''}" data-line="1">funcion main() {</div>`,
-    `<div class="${activeDiagLine === 2 ? 'code-line-active' : ''}" data-line="2">  <span class="${hasLine2Prob ? 'diag-token diag-error' : ''}" tabindex="0" role="button" data-diag-line="2" title="Variable x sin anotación de tipo">variables x = 10</span></div>`,
-    diagTooltip(2, 'Variable x sin anotación de tipo (HELLO.bara:2:3)'),
-    `<div class="${activeDiagLine === 3 ? 'code-line-active' : ''}" data-line="3">  si x &gt; 5 {</div>`,
-    `<div class="${activeDiagLine === 4 ? 'code-line-active' : ''}" data-line="4">    <span class="${hasLine4Prob ? 'err-line diag-token' : ''}" tabindex="0" role="button" data-diag-line="4" title="Identificador 'mostrar' — aviso de firma">mostrar("Bara IDE")</span></div>`,
-    diagTooltip(4, "Identificador 'mostrar' — aviso de firma (HELLO.bara:4:5)"),
-    `<div class="${activeDiagLine === 5 ? 'code-line-active' : ''}" data-line="5">  }</div>`,
-    `<div class="${activeDiagLine === 6 ? 'code-line-active' : ''}" data-line="6">}</div>`
+    `<div class="${lineClass(1)}" data-line="1">funcion main() {${cursorHtml(1)}</div>`,
+    `<div class="${lineClass(2)}" data-line="2">  <span class="${hasLine2Prob ? 'diag-token diag-info' : ''}" tabindex="0" role="button" data-diag-file="HELLO.bara" data-diag-line="2" title="Variable x sin anotación de tipo">variables x = 10</span>${cursorHtml(2)}</div>`,
+    diagTooltip(2, 'info', 'ℹ', 'Variable x sin anotación de tipo (HELLO.bara:2:3)'),
+    `<div class="${lineClass(3)}" data-line="3">  si x &gt; 5 {${cursorHtml(3)}</div>`,
+    `<div class="${lineClass(4)}" data-line="4">    <span class="${hasLine4Prob ? 'diag-token diag-warn' : ''}" tabindex="0" role="button" data-diag-file="HELLO.bara" data-diag-line="4" title="Identificador 'mostrar' — aviso de firma">mostrar("Bara IDE")</span>${cursorHtml(4)}</div>`,
+    diagTooltip(4, 'aviso', '⚠', "Identificador 'mostrar' — aviso de firma (HELLO.bara:4:5)"),
+    `<div class="${lineClass(5)}" data-line="5">  }${cursorHtml(5)}</div>`,
+    `<div class="${lineClass(6)}" data-line="6">}${cursorHtml(6)}</div>`
   ].join('');
 
   return `<div class="code"><div class="gutter">${gutterRows}</div><div class="code-body">${bodyRows}</div></div>`;
@@ -305,28 +355,55 @@ function renderTopologyNodesList(scope) {
   `).join('');
 }
 
-// 2. CONTADORES COHERENTES: Tabla de Problemas generada desde el único origen de datos (activeProblems)
+// D. PANEL PROBLEMAS INTERACTIVO: chips Todos/Errores/Avisos/Info desde activeProblems, salto a línea, tooltip completo y navegación con ↑/↓
 function buildProblemsTableHtml() {
-  const rowsHtml = activeProblems.map(p => `
-    <div class="problem-row" role="button" tabindex="0" data-file="${p.file}" data-line="${p.line}" style="display:grid;grid-template-columns:minmax(130px,auto) 1fr auto auto;gap:10px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border2);font-size:14px;cursor:pointer;">
+  const summary = computeProblemsSummary(activeProblems);
+  const filtered = filterProblems(activeProblems, activeProblemsFilter);
+
+  const chipStyle = (key) => activeProblemsFilter === key
+    ? 'background:var(--green-dim);color:#fff;border-color:var(--green-mid);cursor:pointer;padding:1px 8px;font-size:13px'
+    : 'cursor:pointer;padding:1px 8px;font-size:13px';
+
+  const chipsBarHtml = `<div id="problems-filter-bar" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border2);background:#0c1015">
+    <button type="button" class="chip prob-filter-chip" data-prob-filter="todos" style="${chipStyle('todos')}">Todos (${summary.total})</button>
+    <button type="button" class="chip prob-filter-chip" data-prob-filter="error" style="${chipStyle('error')}">Errores (${summary.errors})</button>
+    <button type="button" class="chip prob-filter-chip" data-prob-filter="aviso" style="${chipStyle('aviso')}">Avisos (${summary.warnings})</button>
+    <button type="button" class="chip prob-filter-chip" data-prob-filter="info" style="${chipStyle('info')}">Info (${summary.infos})</button>
+  </div>`;
+
+  const renderSevBadge = (sev) => {
+    if (sev === 'error') return '<span style="color:#c45c5c">✖ error</span>';
+    if (sev === 'aviso') return '<span style="color:#c9a227">⚠ aviso</span>';
+    return '<span style="color:#6ca0dc">ℹ info</span>';
+  };
+
+  const rowsHtml = filtered.map(p => {
+    const isSelected = activeEditorFile === p.file && activeDiagLine === p.line;
+    return `
+    <div class="problem-row ${isSelected ? 'selected-row' : ''}" role="button" tabindex="0" data-prob-id="${p.id}" data-file="${p.file}" data-line="${p.line}" data-col="${p.col}" aria-label="${p.location} ${p.message} (${p.severity})" style="display:grid;grid-template-columns:minmax(130px,auto) 1fr auto auto;gap:10px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border2);font-size:14px;cursor:pointer;">
       <span class="mono" style="color:var(--green-soft)">${p.location}</span>
-      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.message}</span>
-      <span style="color:${p.severity === 'error' ? '#c45c5c' : '#c9a227'}">${p.severity === 'error' ? '✖ error' : '⚠ aviso'}</span>
+      <div class="problem-msg-wrap">
+        <span class="problem-msg-text" title="${p.message}">${p.message}</span>
+        <span class="problem-msg-tooltip" role="tooltip">${p.message}</span>
+      </div>
+      ${renderSevBadge(p.severity)}
       <button type="button" class="btn btn-ghost btn-dismiss-problem" data-dismiss-problem="${p.id}" title="Descartar problema" style="padding:2px 8px;font-size:14px">Descartar</button>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   return `
+    ${chipsBarHtml}
     <div style="display:grid;grid-template-columns:minmax(130px,auto) 1fr auto auto;gap:10px;padding:6px 12px;color:var(--muted);font-size:14px;border-bottom:1px solid var(--border2)">
       <span>archivo:línea:col</span><span>mensaje</span><span>tipo</span><span>acción</span>
     </div>
-    ${rowsHtml || '<div style="padding:12px;color:var(--muted);font-size:14px">Sin problemas activos.</div>'}
+    ${rowsHtml || '<div style="padding:12px;color:var(--muted);font-size:14px">Sin problemas en este filtro.</div>'}
   `;
 }
 
 function buildBottomDockHtml() {
   const summary = computeProblemsSummary(activeProblems);
-  const heightPx = bottomPanelFolded ? '36px' : '210px';
+  const heightPx = bottomPanelFolded ? '36px' : '240px';
   const contentStyle = bottomPanelFolded ? 'display:none' : 'flex:1;overflow:auto';
   const minTitle = bottomPanelFolded ? 'Desplegar panel (Ctrl+J)' : 'Plegar panel (Ctrl+J)';
   return `<div id="bottom-dock" data-folded="${bottomPanelFolded ? 'true' : 'false'}" style="height:${heightPx};border-top:1px solid var(--border);background:#0a0c0d;display:flex;flex-direction:column;flex-shrink:0">
@@ -354,15 +431,28 @@ function buildChatReviewCardHtml() {
     strictMode
   });
 
-  const statusPill = reviewCardVerified
-    ? `<span id="review-card-status-pill" class="chip" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">Verificado</span>`
-    : `<span id="review-card-status-pill" class="chip chip-danger" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">No verificado</span>`;
+  let statusPill = '';
+  if (unverifiedRejected) {
+    statusPill = `<span id="review-card-status-pill" class="chip chip-muted" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">Rechazado</span>`;
+  } else if (reviewCardVerified) {
+    statusPill = `<span id="review-card-status-pill" class="chip" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">Verificado</span>`;
+  } else {
+    statusPill = `<span id="review-card-status-pill" class="chip chip-danger" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">No verificado</span>`;
+  }
 
   let actionAreaHtml = '';
   if (unverifiedAccepted) {
     actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#152018;border:1px solid var(--green-mid);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:8px">
       <span style="font-size:14px">Cambio aceptado en <span class="mono">HELLO.bara</span> · respaldo <span class="mono">${unverifiedAcceptedTimestamp}</span></span>
       <button type="button" id="btn-unverified-undo" class="btn btn-ghost" style="padding:3px 10px;flex-shrink:0">Deshacer</button>
+    </div>`;
+  } else if (unverifiedRejected) {
+    actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#141a21;border:1px solid var(--border);border-radius:8px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <span style="font-size:14px">Cambio rechazado en <span class="mono">HELLO.bara</span></span>
+      <div class="row" style="gap:6px">
+        <button type="button" id="btn-unverified-accept" class="btn btn-danger" style="padding:3px 10px" ${acceptState.disabled ? 'disabled aria-disabled="true" title="Modo estricto: verifica antes de aceptar"' : ''}>Aceptar</button>
+        <button type="button" id="btn-unverified-reject" class="btn btn-ghost" style="padding:3px 10px">Rechazar</button>
+      </div>
     </div>`;
   } else if (!reviewCardVerified) {
     actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#2a1515;border:1px solid var(--danger);border-radius:8px;color:#f0b0b0;display:flex;flex-direction:column;gap:5px">
@@ -388,7 +478,7 @@ function buildChatReviewCardHtml() {
     </div>`;
   }
 
-  return `<div id="chat-review-card" class="card" style="padding:8px 12px;border-color:${reviewCardVerified ? 'var(--green-mid)' : '#5a3030'};display:flex;flex-direction:column;gap:4px;max-width:460px;flex-shrink:0">
+  return `<div id="chat-review-card" class="card" style="padding:8px 12px;border-color:${unverifiedRejected ? 'var(--border)' : (reviewCardVerified ? 'var(--green-mid)' : '#5a3030')};display:flex;flex-direction:column;gap:4px;max-width:440px;flex-shrink:0">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
       <strong style="font-size:14px;color:#fff">Revisión de cambio · <span class="mono">HELLO.bara</span></strong>
       ${statusPill}
@@ -418,9 +508,13 @@ function getScreen06Html() {
         <strong>Chat</strong>
         <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
       </div>
-      <div style="flex:1;min-height:0;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px">
-        <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:8px 12px;border-radius:12px">Añade mostrar_todo()</div>
-        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 12px;border-radius:12px;max-width:440px">
+      <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
+        <span class="mono" style="color:var(--text)">HELLO.bara</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
+        <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">Añade mostrar_todo()</div>
+        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">
           <div style="margin-bottom:6px">Parche propuesto (sin verificación del kernel).</div>
           <span class="chip-danger chip" style="display:inline-flex">Código inventado: la función mostrar_todo() no existe</span>
         </div>
@@ -444,22 +538,25 @@ function getScreen06Html() {
     </aside>`;
 }
 
-// 3. AJUSTES: AÑADIR Carpeta de confianza (C:/Users/Vexor/Downloads/bara-ide + Cambiar…), Autoguardado (encendido por defecto) y Recordar clave DESMARCADO por defecto
+// C.4 & F: AJUSTES con dimensiones V4 (padding 18/28, gaps 16 y 12, Prompt 64px, clave •••• mono, sin ▾ doble) + toggles Offline/GGUF accesibles
 function getScreen13Html() {
   const isLocal = aiProvider === 'Modelo local (GGUF)';
-  return `<main class="main" style="padding:12px 24px;background:#08090a;overflow:auto">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+  const isGgufOn = ggufMode || isLocal;
+  return `<main class="main" style="padding:18px 28px;background:#08090a;overflow:auto">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
         <h1 style="margin:0;font-size:22px;color:#fff">Ajustes</h1>
         <span class="chip">Conexión OK</span>
         <span class="chip mono">Versión ${APP_VERSION}</span>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:980px">
-        <div class="card" style="display:flex;flex-direction:column;gap:8px;padding:12px 16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:980px">
+        <div class="card" style="display:flex;flex-direction:column;gap:12px">
           <div class="row" style="justify-content:space-between">
-            <span>Offline</span><div class="toggle"></div>
+            <span>Offline</span>
+            <button type="button" id="toggle-offline" role="switch" aria-checked="${offlineMode ? 'true' : 'false'}" aria-label="Offline" class="toggle ${offlineMode ? 'on' : ''}"></button>
           </div>
           <div class="row" style="justify-content:space-between">
-            <span>GGUF</span><div class="toggle ${isLocal ? 'on' : ''}"></div>
+            <span>GGUF</span>
+            <button type="button" id="toggle-gguf" role="switch" aria-checked="${isGgufOn ? 'true' : 'false'}" aria-label="GGUF" class="toggle ${isGgufOn ? 'on' : ''}"></button>
           </div>
           <div class="row" style="justify-content:space-between">
             <div>
@@ -475,7 +572,7 @@ function getScreen13Html() {
           <div>
             <label class="label" for="settings-provider-select">Proveedor</label>
             <select id="settings-provider-select" class="field" aria-label="Proveedor de IA">
-              <option value="DeepSeek" ${!isLocal ? 'selected' : ''}>DeepSeek ▾</option>
+              <option value="DeepSeek" ${!isLocal ? 'selected' : ''}>DeepSeek</option>
               <option value="Modelo local (GGUF)" ${isLocal ? 'selected' : ''}>Modelo local (GGUF)</option>
             </select>
           </div>
@@ -485,7 +582,7 @@ function getScreen13Html() {
           </div>
           <div>
             <label class="label">Clave conexión</label>
-            <div class="field" style="color:var(--muted)">····················</div>
+            <div class="field mono" style="color:var(--muted)">••••</div>
             <label id="label-remember-key" class="row" style="margin-top:8px;color:var(--muted);cursor:pointer" role="checkbox" aria-checked="${rememberKey ? 'true' : 'false'}" tabindex="0">
               <span id="check-remember-key" class="check ${rememberKey ? 'on' : ''}">${rememberKey ? '✓' : ''}</span> Recordar clave en llavero local
             </label>
@@ -499,8 +596,8 @@ function getScreen13Html() {
             <div class="field mono" style="font-size:14px">https://api.deepseek.com/v1</div>
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px">
-          <div class="card" style="border-style:dashed;padding:12px 16px">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="card" style="border-style:dashed">
             <div style="font-weight:600;margin-bottom:6px">Avanzado</div>
             <div class="row" style="justify-content:space-between;margin-bottom:6px">
               <span>Temperatura</span>
@@ -515,17 +612,17 @@ function getScreen13Html() {
             </div>
             <div style="margin-top:6px">
               <label class="label">Prompt del sistema</label>
-              <div class="field" style="min-height:44px">Eres el asistente oficial del lenguaje Bara.</div>
+              <div class="field" style="min-height:64px">Eres el asistente oficial del lenguaje Bara.</div>
             </div>
           </div>
-          <div class="card" style="padding:12px 16px">
+          <div class="card">
             <div style="font-weight:600;margin-bottom:6px">Carpeta de confianza</div>
             <div style="display:flex;align-items:center;gap:8px">
               <input id="trusted-folder-input" class="field mono" readonly value="${trustedFolder}" aria-label="Carpeta de confianza"/>
               <button type="button" id="btn-change-trusted-folder" class="btn btn-ghost" style="flex-shrink:0">Cambiar…</button>
             </div>
           </div>
-          <div class="card" style="padding:10px 16px">
+          <div class="card">
             <div style="font-weight:600;margin-bottom:6px">Ajustes de interfaz</div>
             <div class="row" style="justify-content:space-between;margin-bottom:4px">
               <span>Tamaño de letra</span>
@@ -542,7 +639,7 @@ function getScreen13Html() {
           </div>
         </div>
       </div>
-      <div class="row" style="margin-top:10px;gap:10px">
+      <div class="row" style="margin-top:12px;gap:10px">
         <button class="btn btn-primary">${SVG.save(16)} Guardar</button>
         <button class="btn btn-ghost">Valores de fábrica</button>
         <button class="btn btn-danger">Olvidar</button>
@@ -550,23 +647,36 @@ function getScreen13Html() {
     </main>`;
 }
 
-function getScreen12Html() {
-  const rows = getActiveRegistros().map(r => `
-    <div class="mono" style="padding:6px 0;border-bottom:1px solid rgba(30,42,56,.5)">
+function renderFilteredRegistrosRows() {
+  const filtered = filterRegistros(getActiveRegistros(), registrosLevelFilter, registrosSearchQuery);
+  if (filtered.length === 0) {
+    return `<div id="registros-empty-msg" style="padding:12px 0;color:var(--muted);font-size:14px">Sin registros que coincidan</div>`;
+  }
+  return filtered.map(r => `
+    <div class="mono registro-row" style="padding:6px 0;border-bottom:1px solid rgba(30,42,56,.5)">
       <span style="color:var(--muted)">${r.time}</span>
       <span style="color:${r.color};font-weight:600"> [${r.level}]</span>
       <span> ${r.text}</span>
     </div>
   `).join('');
+}
+
+function getScreen12Html() {
+  const chipStyle = (lvl) => registrosLevelFilter === lvl
+    ? 'background:var(--green-dim);color:#fff;border-color:var(--green-mid);cursor:pointer'
+    : 'cursor:pointer';
 
   return `<main class="main" style="padding:22px 32px;background:#08090a">
     <h1 style="margin:0 0 14px;font-size:22px;color:var(--green-soft)">Registros</h1>
     <div class="row" style="margin-bottom:14px;flex-wrap:wrap">
-      <span class="chip" style="background:var(--green-dim);color:#fff;border-color:var(--green-mid)">Todo</span><span class="chip">Errores</span><span class="chip">Avisos</span><span class="chip">Info</span>
-      <input class="field" style="max-width:280px;margin-left:auto" placeholder="Filtrar registros…"/>
+      <button type="button" class="chip reg-filter-chip" data-reg-level="todo" style="${chipStyle('todo')}">Todo</button>
+      <button type="button" class="chip reg-filter-chip" data-reg-level="errores" style="${chipStyle('errores')}">Errores</button>
+      <button type="button" class="chip reg-filter-chip" data-reg-level="avisos" style="${chipStyle('avisos')}">Avisos</button>
+      <button type="button" class="chip reg-filter-chip" data-reg-level="info" style="${chipStyle('info')}">Info</button>
+      <input id="registros-filter-input" class="field" style="max-width:280px;margin-left:auto" value="${registrosSearchQuery}" placeholder="Filtrar registros…" aria-label="Filtrar registros"/>
     </div>
-    <div class="card" style="max-width:1000px;font-size:14px;line-height:1.5">
-      ${rows}
+    <div id="registros-list-card" class="card" style="max-width:1000px;font-size:14px;line-height:1.5">
+      ${renderFilteredRegistrosRows()}
     </div>
   </main>`;
 }
@@ -699,24 +809,25 @@ const SCREENS = {
           <strong style="font-size:15px">Chat</strong>
           <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
         </div>
-        <div style="height:28px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
+        <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
           <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
-          <span class="mono" style="color:var(--text)">HELLO.bara</span>
+          <span class="mono" style="color:var(--text)">${activeEditorFile}</span>
         </div>
-        <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+        <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
           <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
             <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
             <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
             <div style="color:var(--green-soft)">✓ Confirmé firma</div>
           </div>
-          <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:8px 12px;border-radius:12px;max-width:320px">¿Qué hace este código?</div>
-          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 12px;border-radius:12px;max-width:440px">
+          <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">¿Qué hace este código?</div>
+          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">
             <p style="margin:0 0 6px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
             <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
           </div>
           ${buildChatReviewCardHtml()}
         </div>
         ${COMPOSER_HTML}
+        ${bottomPanelOpen ? buildBottomDockHtml() : ''}
       </section>
       <aside class="editor-pane">
         ${buildTabbar(true)}
@@ -927,7 +1038,7 @@ const SCREENS = {
           ${renderTopologyNodesList('proyecto')}
         </div>
       </div>
-      <div id="topology-graph-view" role="alert" aria-label="Grafo de topología" style="flex:1;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;background:#070a0e;padding:12px">
+      <div id="topology-graph-view" role="img" aria-label="Grafo del proyecto: HELLO, main, ContratoA, TipoRuta, src" style="flex:1;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;background:#070a0e;padding:12px">
         ${TOPOLOGY_SETS.proyecto.svg}
       </div>
       <div style="width:240px;flex-shrink:0;border-left:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--rail)">
@@ -986,7 +1097,7 @@ const SCREENS = {
           <div style="display:flex;flex-direction:column;gap:12px">
             <div class="card">
               <label class="label">Mensaje del commit</label>
-              <textarea class="field" style="height:80px;resize:none">Mejora saludo en HELLO.bara</textarea>
+              <textarea class="field" style="height:100px;resize:none">Mejora saludo en HELLO.bara</textarea>
               <button class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center">Preparar commit…</button>
             </div>
             <div class="card">
@@ -998,7 +1109,7 @@ const SCREENS = {
             </div>
           </div>
         </div>
-        <div class="modal-backdrop">
+        <div id="git-commit-modal" class="modal-backdrop" style="display:none">
           <div class="modal">
             <h2 style="margin:0 0 8px;font-size:18px">Confirmar commit</h2>
             <p style="margin:0 0 12px;color:var(--muted);font-size:14px">Se incluirán estos archivos:</p>
@@ -1030,18 +1141,18 @@ const SCREENS = {
           <strong style="font-size:15px">Chat</strong>
           <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
         </div>
-        <div style="height:28px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
+        <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
           <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
-          <span class="mono" style="color:var(--text)">HELLO.bara</span>
+          <span class="mono" style="color:var(--text)">${activeEditorFile}</span>
         </div>
-        <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+        <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
           <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
             <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
             <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
             <div style="color:var(--green-soft)">✓ Confirmé firma</div>
           </div>
-          <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:8px 12px;border-radius:12px;max-width:320px">¿Qué hace este código?</div>
-          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 12px;border-radius:12px;max-width:440px">
+          <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">¿Qué hace este código?</div>
+          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">
             <p style="margin:0 0 6px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
             <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
           </div>
@@ -1173,7 +1284,7 @@ function closeMoreTabsPortal(restoreFocus = false) {
 function openMoreTabsPortal() {
   if (!bottomPanelOpen && currentScreenId !== '11') {
     bottomPanelOpen = true;
-    renderScreen('11');
+    renderScreen(currentScreenId);
   }
   const btn = document.getElementById('bp-more-tabs-btn');
   if (!btn) return;
@@ -1194,14 +1305,10 @@ function openMoreTabsPortal() {
   portal.style.left = `${leftPos}px`;
   portal.style.bottom = `${bottomPos}px`;
 
-  const allMenuTabs = [
-    { id: 'problemas', label: 'Problemas' },
-    { id: 'registros', label: 'Registros' },
-    { id: 'terminal', label: 'Terminal kernel' },
-    ...MORE_TABS_ITEMS
-  ];
+  // B.2: Bilattice, Ledger, Núcleo y Telemetría NO salen mientras showAdvanced = false
+  const visibleMenuTabs = getVisibleMoreTabs(showAdvanced);
 
-  portal.innerHTML = allMenuTabs.map(item => `
+  portal.innerHTML = visibleMenuTabs.map(item => `
     <button type="button" class="more-tabs-item" role="menuitem" data-more-tab="${item.id}">
       <span>${item.label}</span>
     </button>
@@ -1209,16 +1316,27 @@ function openMoreTabsPortal() {
 
   document.body.appendChild(portal);
 
-  portal.querySelectorAll('.more-tabs-item').forEach(menuBtn => {
+  const items = Array.from(portal.querySelectorAll('.more-tabs-item'));
+  items.forEach((menuBtn, idx) => {
     menuBtn.onclick = (e) => {
       e.stopPropagation();
       const tabId = menuBtn.getAttribute('data-more-tab');
       closeMoreTabsPortal(true);
       const content = document.getElementById('bp-content');
       if (!content) return;
+      if (bottomPanelFolded) {
+        bottomPanelFolded = false;
+        const dock = document.getElementById('bottom-dock');
+        if (dock) {
+          dock.style.height = '240px';
+          dock.setAttribute('data-folded', 'false');
+        }
+        content.style.display = '';
+        content.style.flex = '1';
+        content.style.overflow = 'auto';
+      }
       if (tabId === 'problemas') {
-        content.innerHTML = buildProblemsTableHtml();
-        bindProblemRowEvents();
+        document.getElementById('bp-tab-problemas')?.click();
       } else if (tabId === 'registros') {
         document.getElementById('bp-tab-registros')?.click();
       } else if (tabId === 'terminal') {
@@ -1230,10 +1348,24 @@ function openMoreTabsPortal() {
         }
       }
     };
+
+    // B.8: Las flechas ↑ y ↓ navegan entre las opciones, Enter elige, y Esc cierra y devuelve el foco a »
+    menuBtn.onkeydown = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        items[(idx + 1) % items.length]?.focus();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        items[(idx - 1 + items.length) % items.length]?.focus();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMoreTabsPortal(true);
+      }
+    };
   });
 
-  const first = portal.querySelector('.more-tabs-item');
-  if (first) first.focus();
+  if (items[0]) items[0].focus();
 }
 
 function toggleEditorFirstLayout() {
@@ -1257,6 +1389,7 @@ function dismissProblemById(probId) {
 
 function resetProblems() {
   activeProblems = INITIAL_PROBLEMS.map(p => ({ ...p }));
+  activeProblemsFilter = 'todos';
   syncShellAdditions();
   renderScreen(currentScreenId);
 }
@@ -1279,11 +1412,12 @@ function syncShellAdditions() {
   const verEl = document.getElementById('status-version-tag');
   if (verEl) verEl.textContent = APP_VERSION;
 
-  // 2. CONTADORES COHERENTES: barra de estado, ⚠ N y pestaña Problemas usan el mismo origen de datos
+  // 2. CONTADORES COHERENTES: barra de estado, Σ N y pestaña Problemas usan el mismo origen de datos
   const summary = computeProblemsSummary(activeProblems);
   const probStatusEl = document.getElementById('status-problemas-trigger');
   if (probStatusEl) {
     probStatusEl.textContent = summary.statusText;
+    probStatusEl.setAttribute('title', summary.statusText);
   }
   const diagCounterEl = document.getElementById('status-diag-counter');
   const diagTextEl = document.getElementById('status-diag-text');
@@ -1298,7 +1432,7 @@ function syncShellAdditions() {
   }
   if (diagCounterEl) {
     diagCounterEl.setAttribute('aria-label', summary.totalTooltip);
-    diagCounterEl.setAttribute('title', summary.totalTooltip);
+    diagCounterEl.removeAttribute('title');
   }
   const bpTabProbEl = document.getElementById('bp-tab-problemas');
   if (bpTabProbEl) {
@@ -1320,10 +1454,18 @@ function syncShellAdditions() {
 window.BaraIDE = {
   version: APP_VERSION,
   topologyScope: 'proyecto',
-  constructorMode: 'blueprint',
   jumpToLine(file, line) {
+    activeEditorFile = file || 'HELLO.bara';
     activeDiagLine = line;
-    renderScreen(bottomPanelOpen ? '11' : '03');
+    highlightedLine = line;
+    if (highlightLineTimer) clearTimeout(highlightLineTimer);
+    renderScreen(currentScreenId);
+    highlightLineTimer = setTimeout(() => {
+      highlightedLine = null;
+      document.querySelectorAll('.code-line-highlight').forEach(el => {
+        el.classList.remove('code-line-highlight');
+      });
+    }, 1500);
   },
   showToast: showEphemeralToast,
   toggleEditorFirstLayout,
@@ -1375,6 +1517,12 @@ function updateTopologyScope(scope) {
   }
   if (graphEl) {
     graphEl.innerHTML = data.svg;
+    graphEl.setAttribute(
+      'aria-label',
+      scope === 'proyecto'
+        ? 'Grafo del proyecto: HELLO, main, ContratoA, TipoRuta, src'
+        : 'Grafo de Bara: kernel, mostrar, registrar, Firma'
+    );
   }
   const first = data.nodes[0];
   if (first) {
@@ -1416,6 +1564,13 @@ function renderScreen(screenId) {
   closeMoreTabsPortal(false);
   if (screenId !== currentScreenId) {
     previousScreenId = currentScreenId;
+    if (screenId === '11') {
+      bottomPanelOpen = true;
+    } else if (screenId !== '03') {
+      bottomPanelOpen = false;
+    }
+  } else if (screenId === '11') {
+    bottomPanelOpen = true;
   }
   currentScreenId = screenId;
   const screen = SCREENS[screenId] || SCREENS['01'];
@@ -1441,13 +1596,12 @@ function renderScreen(screenId) {
 
   const viewport = document.getElementById('screen-viewport');
   if (viewport) {
-    bottomPanelOpen = (screenId === '11');
     const html = screen.html;
     viewport.innerHTML = html;
     syncShellAdditions();
     bindScreenInteractions();
 
-    if (screenId === '11' && !bottomPanelFolded) {
+    if ((screenId === '11' || bottomPanelOpen) && !bottomPanelFolded) {
       const scrollChatToReview = () => {
         const chatScroll = document.getElementById('chat-messages-scroll');
         const reviewCard = document.getElementById('chat-review-card');
@@ -1461,19 +1615,33 @@ function renderScreen(screenId) {
   }
 }
 
+// B.6: Ctrl+J solo pliega o despliega el panel inferior. NO cambia de pantalla.
 function toggleBottomPanel() {
   closeMoreTabsPortal(false);
-  if (currentScreenId === '11') {
+  const existingDock = document.getElementById('bottom-dock');
+  if (existingDock) {
     bottomPanelFolded = !bottomPanelFolded;
-    renderScreen('11');
+    renderScreen(currentScreenId);
   } else {
-    bottomPanelFolded = false;
     bottomPanelOpen = true;
-    renderScreen('11');
+    bottomPanelFolded = false;
+    renderScreen(currentScreenId);
   }
 }
 
 function bindProblemRowEvents() {
+  document.querySelectorAll('.prob-filter-chip').forEach(chip => {
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      activeProblemsFilter = chip.getAttribute('data-prob-filter') || 'todos';
+      const content = document.getElementById('bp-content');
+      if (content) {
+        content.innerHTML = buildProblemsTableHtml();
+        bindProblemRowEvents();
+      }
+    };
+  });
+
   document.querySelectorAll('.btn-dismiss-problem').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -1481,19 +1649,48 @@ function bindProblemRowEvents() {
       if (probId) dismissProblemById(probId);
     };
   });
-  document.querySelectorAll('.problem-row').forEach(row => {
+
+  const rows = Array.from(document.querySelectorAll('.problem-row'));
+  rows.forEach((row, idx) => {
     const file = row.getAttribute('data-file') || 'HELLO.bara';
     const line = parseInt(row.getAttribute('data-line') || '1', 10);
-    bindKeyboardRoleButton(row, (e) => {
+    row.onclick = (e) => {
       if (e.target && e.target.closest('.btn-dismiss-problem')) return;
       window.BaraIDE.jumpToLine(file, line);
-    });
+    };
+    row.onkeydown = (e) => {
+      if (e.target && e.target.closest('.btn-dismiss-problem')) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        window.BaraIDE.jumpToLine(file, line);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        rows[(idx + 1) % rows.length]?.focus();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        rows[(idx - 1 + rows.length) % rows.length]?.focus();
+      }
+    };
   });
+
   document.querySelectorAll('.diag-token').forEach(tok => {
+    const file = tok.getAttribute('data-diag-file') || 'HELLO.bara';
     const line = parseInt(tok.getAttribute('data-diag-line') || '4', 10);
     bindKeyboardRoleButton(tok, () => {
+      activeEditorFile = file;
       activeDiagLine = line;
       renderScreen(currentScreenId);
+    });
+  });
+
+  document.querySelectorAll('[data-editor-tab]').forEach(tabEl => {
+    bindKeyboardRoleButton(tabEl, (e) => {
+      if (e.target && e.target.closest('.x')) return;
+      const targetFile = tabEl.getAttribute('data-editor-tab');
+      if (targetFile) {
+        activeEditorFile = targetFile;
+        renderScreen(currentScreenId);
+      }
     });
   });
 }
@@ -1509,10 +1706,11 @@ function bindScreenInteractions() {
     };
   }
 
-  // 1. Tarjeta de revisión en el Chat: alternar Verificado / No verificado, Aceptar, Rechazar, Deshacer
+  // B.5: Tarjeta de revisión en el Chat: Aceptar, Deshacer y Rechazar registran en Registros sin borrar líneas previas
   const reviewPill = document.getElementById('review-card-status-pill');
   if (reviewPill) {
     bindKeyboardRoleButton(reviewPill, () => {
+      unverifiedRejected = false;
       reviewCardVerified = !reviewCardVerified;
       renderScreen(currentScreenId);
     });
@@ -1522,6 +1720,13 @@ function bindScreenInteractions() {
     unvAccept.onclick = () => {
       if (!reviewCardVerified && strictMode) return;
       unverifiedAccepted = true;
+      unverifiedRejected = false;
+      appendedRegistros.push({
+        time: '10:33:00',
+        level: 'INFO',
+        color: 'var(--green-soft)',
+        text: `Cambio aceptado en HELLO.bara · respaldo ${unverifiedAcceptedTimestamp}`
+      });
       renderScreen(currentScreenId);
     };
   }
@@ -1529,6 +1734,13 @@ function bindScreenInteractions() {
   if (unvReject) {
     unvReject.onclick = () => {
       unverifiedAccepted = false;
+      unverifiedRejected = true;
+      appendedRegistros.push({
+        time: '10:33:10',
+        level: 'AVISO',
+        color: '#c9a227',
+        text: 'Cambio rechazado en HELLO.bara'
+      });
       showEphemeralToast('Cambio rechazado');
       renderScreen(currentScreenId);
     };
@@ -1537,6 +1749,13 @@ function bindScreenInteractions() {
   if (unvUndo) {
     unvUndo.onclick = () => {
       unverifiedAccepted = false;
+      unverifiedRejected = false;
+      appendedRegistros.push({
+        time: '10:33:05',
+        level: 'INFO',
+        color: 'var(--green-soft)',
+        text: `Cambio deshecho en HELLO.bara · restaurado respaldo ${unverifiedAcceptedTimestamp}`
+      });
       renderScreen(currentScreenId);
     };
   }
@@ -1551,30 +1770,44 @@ function bindScreenInteractions() {
     };
   }
 
-  // 3. Ajustes (13): Modo estricto, Autoguardado, Recordar clave, Carpeta de confianza, Proveedor
+  // F & C.4: Ajustes (13): Offline, GGUF, Modo estricto, Autoguardado, Recordar clave, Carpeta de confianza, Proveedor
+  const offlineBtn = document.getElementById('toggle-offline');
+  if (offlineBtn) {
+    bindKeyboardRoleButton(offlineBtn, () => {
+      offlineMode = !offlineMode;
+      renderScreen('13');
+    });
+  }
+  const ggufBtn = document.getElementById('toggle-gguf');
+  if (ggufBtn) {
+    bindKeyboardRoleButton(ggufBtn, () => {
+      ggufMode = !ggufMode;
+      renderScreen('13');
+    });
+  }
   const strictBtn = document.getElementById('toggle-strict-mode');
   if (strictBtn) {
-    strictBtn.onclick = () => {
+    bindKeyboardRoleButton(strictBtn, () => {
       strictMode = !strictMode;
       try { localStorage.setItem('strictMode', String(strictMode)); } catch (_) {}
       renderScreen('13');
-    };
+    });
   }
   const autosaveBtn = document.getElementById('toggle-autosave');
   if (autosaveBtn) {
-    autosaveBtn.onclick = () => {
+    bindKeyboardRoleButton(autosaveBtn, () => {
       autosave = !autosave;
       try { localStorage.setItem('autosave', String(autosave)); } catch (_) {}
       renderScreen('13');
-    };
+    });
   }
   const rememberLabel = document.getElementById('label-remember-key');
   if (rememberLabel) {
-    rememberLabel.onclick = (e) => {
+    bindKeyboardRoleButton(rememberLabel, (e) => {
       e.preventDefault();
       rememberKey = !rememberKey;
       renderScreen('13');
-    };
+    });
   }
   const changeFolderBtn = document.getElementById('btn-change-trusted-folder');
   if (changeFolderBtn) {
@@ -1591,6 +1824,24 @@ function bindScreenInteractions() {
     provSelect.onchange = (e) => {
       aiProvider = e.target.value;
       renderScreen('13');
+    };
+  }
+
+  // B.4: Registros (12): chips Todo/Errores/Avisos/Info y campo «Filtrar registros…» combinados
+  document.querySelectorAll('.reg-filter-chip').forEach(chip => {
+    chip.onclick = () => {
+      registrosLevelFilter = chip.getAttribute('data-reg-level') || 'todo';
+      renderScreen('12');
+    };
+  });
+  const regInput = document.getElementById('registros-filter-input');
+  if (regInput) {
+    regInput.oninput = (e) => {
+      registrosSearchQuery = e.target.value;
+      const listCard = document.getElementById('registros-list-card');
+      if (listCard) {
+        listCard.innerHTML = renderFilteredRegistrosRows();
+      }
     };
   }
 
@@ -1637,7 +1888,7 @@ function bindScreenInteractions() {
   if (bpMin) {
     bpMin.onclick = () => {
       bottomPanelFolded = !bottomPanelFolded;
-      renderScreen('11');
+      renderScreen(currentScreenId);
     };
   }
   const bpClose = document.getElementById('bp-btn-close');
@@ -1645,7 +1896,11 @@ function bindScreenInteractions() {
     bpClose.onclick = () => {
       bottomPanelFolded = false;
       bottomPanelOpen = false;
-      renderScreen('03');
+      if (currentScreenId === '11') {
+        renderScreen('03');
+      } else {
+        renderScreen(currentScreenId);
+      }
     };
   }
   const bpMax = document.getElementById('bp-btn-maximize');
@@ -1655,10 +1910,10 @@ function bindScreenInteractions() {
       if (dock) {
         if (bottomPanelFolded) {
           bottomPanelFolded = false;
-          renderScreen('11');
+          renderScreen(currentScreenId);
           return;
         }
-        dock.style.height = dock.style.height === '340px' ? '210px' : '340px';
+        dock.style.height = dock.style.height === '340px' ? '240px' : '340px';
       }
     };
   }
@@ -1675,7 +1930,7 @@ function bindScreenInteractions() {
           const dock = document.getElementById('bottom-dock');
           const contentEl = document.getElementById('bp-content');
           if (dock) {
-            dock.style.height = '210px';
+            dock.style.height = '240px';
             dock.setAttribute('data-folded', 'false');
           }
           if (contentEl) {
@@ -1998,6 +2253,12 @@ document.addEventListener('DOMContentLoaded', () => {
         toast05.style.display = 'none';
         return;
       }
+      const openModal = Array.from(document.querySelectorAll('.modal-backdrop')).find(m => getComputedStyle(m).display !== 'none');
+      if (openModal) {
+        e.preventDefault();
+        openModal.style.display = 'none';
+        return;
+      }
       if (currentScreenId === '02' || currentScreenId === '13') {
         renderScreen(previousScreenId || '01');
         return;
@@ -2006,7 +2267,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderScreen('03');
         return;
       }
-      document.querySelectorAll('.modal-backdrop').forEach(m => m.style.display = 'none');
       document.getElementById('demo-menu')?.classList.remove('open');
     }
   });
