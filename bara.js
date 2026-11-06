@@ -326,19 +326,22 @@ function buildProblemsTableHtml() {
 
 function buildBottomDockHtml() {
   const summary = computeProblemsSummary(activeProblems);
-  return `<div id="bottom-dock" style="height:210px;border-top:1px solid var(--border);background:#0a0c0d;display:flex;flex-direction:column;flex-shrink:0">
-    <div style="height:36px;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--border);gap:2px;min-width:0">
+  const heightPx = bottomPanelFolded ? '36px' : '210px';
+  const contentStyle = bottomPanelFolded ? 'display:none' : 'flex:1;overflow:auto';
+  const minTitle = bottomPanelFolded ? 'Desplegar panel (Ctrl+J)' : 'Plegar panel (Ctrl+J)';
+  return `<div id="bottom-dock" data-folded="${bottomPanelFolded ? 'true' : 'false'}" style="height:${heightPx};border-top:1px solid var(--border);background:#0a0c0d;display:flex;flex-direction:column;flex-shrink:0">
+    <div style="height:36px;display:flex;align-items:center;padding:0 6px;border-bottom:${bottomPanelFolded ? 'none' : '1px solid var(--border)'};gap:2px;min-width:0">
       <div id="bp-tab-problemas" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;background:var(--hover);border-radius:4px;color:#fff;font-weight:600;cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Problemas (${summary.total})</div>
       <div id="bp-tab-registros" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Registros</div>
       <div id="bp-tab-terminal" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto">Terminal kernel</div>
       <button type="button" id="bp-more-tabs-btn" class="dock-ctrl-btn" aria-label="Más pestañas" aria-haspopup="menu" aria-expanded="false" title="Más pestañas (»)" style="padding:0 7px;width:auto;font-weight:700;color:var(--green-soft)">»</button>
       <div style="margin-left:auto;display:flex;gap:2px;align-items:center;flex-shrink:0">
-        <button type="button" id="bp-btn-minimize" class="dock-ctrl-btn" aria-label="Minimizar panel" title="Minimizar panel (Ctrl+J)">${SVG.minimize(16)}</button>
+        <button type="button" id="bp-btn-minimize" class="dock-ctrl-btn" aria-label="${minTitle}" title="${minTitle}">${SVG.minimize(16)}</button>
         <button type="button" id="bp-btn-maximize" class="dock-ctrl-btn" aria-label="Maximizar panel" title="Maximizar panel">${SVG.maximize(16)}</button>
         <button type="button" id="bp-btn-close" class="dock-ctrl-btn" aria-label="Cerrar panel" title="Cerrar panel (Ctrl+J)">${SVG.close(16)}</button>
       </div>
     </div>
-    <div id="bp-content" style="flex:1;overflow:auto">
+    <div id="bp-content" style="${contentStyle}">
       ${buildProblemsTableHtml()}
     </div>
   </div>`;
@@ -483,6 +486,9 @@ function getScreen13Html() {
           <div>
             <label class="label">Clave conexión</label>
             <div class="field" style="color:var(--muted)">····················</div>
+            <label id="label-remember-key" class="row" style="margin-top:8px;color:var(--muted);cursor:pointer" role="checkbox" aria-checked="${rememberKey ? 'true' : 'false'}" tabindex="0">
+              <span id="check-remember-key" class="check ${rememberKey ? 'on' : ''}">${rememberKey ? '✓' : ''}</span> Recordar clave en llavero local
+            </label>
           </div>
           <div class="row">
             <button class="btn btn-ghost">Listar modelos</button>
@@ -511,9 +517,6 @@ function getScreen13Html() {
               <label class="label">Prompt del sistema</label>
               <div class="field" style="min-height:44px">Eres el asistente oficial del lenguaje Bara.</div>
             </div>
-            <label id="label-remember-key" class="row" style="margin-top:8px;color:var(--muted);cursor:pointer">
-              <span id="check-remember-key" class="check ${rememberKey ? 'on' : ''}">${rememberKey ? '✓' : ''}</span> Recordar clave en llavero local
-            </label>
           </div>
           <div class="card" style="padding:12px 16px">
             <div style="font-weight:600;margin-bottom:6px">Carpeta de confianza</div>
@@ -700,7 +703,7 @@ const SCREENS = {
           <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
           <span class="mono" style="color:var(--text)">HELLO.bara</span>
         </div>
-        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+        <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
           <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
             <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
             <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
@@ -1031,7 +1034,7 @@ const SCREENS = {
           <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
           <span class="mono" style="color:var(--text)">HELLO.bara</span>
         </div>
-        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+        <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
           <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
             <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
             <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
@@ -1125,6 +1128,7 @@ const SCREENS = {
 let currentScreenId = '01';
 let previousScreenId = '01';
 let bottomPanelOpen = false;
+let bottomPanelFolded = false;
 let ephemeralToastTimer = null;
 
 function showEphemeralToast(message) {
@@ -1282,8 +1286,19 @@ function syncShellAdditions() {
     probStatusEl.textContent = summary.statusText;
   }
   const diagCounterEl = document.getElementById('status-diag-counter');
-  if (diagCounterEl) {
+  const diagTextEl = document.getElementById('status-diag-text');
+  const diagTooltipEl = document.getElementById('status-total-tooltip');
+  if (diagTextEl) {
+    diagTextEl.textContent = summary.badgeText;
+  } else if (diagCounterEl) {
     diagCounterEl.textContent = summary.badgeText;
+  }
+  if (diagTooltipEl) {
+    diagTooltipEl.textContent = summary.totalTooltip;
+  }
+  if (diagCounterEl) {
+    diagCounterEl.setAttribute('aria-label', summary.totalTooltip);
+    diagCounterEl.setAttribute('title', summary.totalTooltip);
   }
   const bpTabProbEl = document.getElementById('bp-tab-problemas');
   if (bpTabProbEl) {
@@ -1431,20 +1446,30 @@ function renderScreen(screenId) {
     viewport.innerHTML = html;
     syncShellAdditions();
     bindScreenInteractions();
+
+    if (screenId === '11' && !bottomPanelFolded) {
+      const scrollChatToReview = () => {
+        const chatScroll = document.getElementById('chat-messages-scroll');
+        const reviewCard = document.getElementById('chat-review-card');
+        if (chatScroll && reviewCard) {
+          chatScroll.scrollTop = chatScroll.scrollHeight;
+        }
+      };
+      scrollChatToReview();
+      requestAnimationFrame(scrollChatToReview);
+    }
   }
 }
 
 function toggleBottomPanel() {
   closeMoreTabsPortal(false);
-  bottomPanelOpen = !bottomPanelOpen;
-  if (bottomPanelOpen) {
+  if (currentScreenId === '11') {
+    bottomPanelFolded = !bottomPanelFolded;
     renderScreen('11');
   } else {
-    if (currentScreenId === '11') {
-      renderScreen('03');
-    } else {
-      renderScreen(currentScreenId);
-    }
+    bottomPanelFolded = false;
+    bottomPanelOpen = true;
+    renderScreen('11');
   }
 }
 
@@ -1610,17 +1635,29 @@ function bindScreenInteractions() {
   // Bottom dock controls
   const bpMin = document.getElementById('bp-btn-minimize');
   if (bpMin) {
-    bpMin.onclick = () => toggleBottomPanel();
+    bpMin.onclick = () => {
+      bottomPanelFolded = !bottomPanelFolded;
+      renderScreen('11');
+    };
   }
   const bpClose = document.getElementById('bp-btn-close');
   if (bpClose) {
-    bpClose.onclick = () => toggleBottomPanel();
+    bpClose.onclick = () => {
+      bottomPanelFolded = false;
+      bottomPanelOpen = false;
+      renderScreen('03');
+    };
   }
   const bpMax = document.getElementById('bp-btn-maximize');
   if (bpMax) {
     bpMax.onclick = () => {
       const dock = document.getElementById('bottom-dock');
       if (dock) {
+        if (bottomPanelFolded) {
+          bottomPanelFolded = false;
+          renderScreen('11');
+          return;
+        }
         dock.style.height = dock.style.height === '340px' ? '210px' : '340px';
       }
     };
@@ -1633,6 +1670,20 @@ function bindScreenInteractions() {
     const tabEl = document.getElementById(`bp-tab-${tabName}`);
     if (tabEl) {
       bindKeyboardRoleButton(tabEl, () => {
+        if (bottomPanelFolded) {
+          bottomPanelFolded = false;
+          const dock = document.getElementById('bottom-dock');
+          const contentEl = document.getElementById('bp-content');
+          if (dock) {
+            dock.style.height = '210px';
+            dock.setAttribute('data-folded', 'false');
+          }
+          if (contentEl) {
+            contentEl.style.display = '';
+            contentEl.style.flex = '1';
+            contentEl.style.overflow = 'auto';
+          }
+        }
         document.querySelectorAll('.bp-tab').forEach(t => {
           t.style.background = 'transparent';
           t.style.color = 'var(--muted)';

@@ -46,7 +46,8 @@ test('single source of truth for problems computes coherent counters and updates
   assert.equal(initialSummary.warnings, 1);
   assert.equal(initialSummary.errors, 2);
   assert.equal(initialSummary.statusText, '3 problemas · ⚠ 1 aviso · ✖ 2 errores');
-  assert.equal(initialSummary.badgeText, '⚠ 3');
+  assert.equal(initialSummary.badgeText, 'Σ 3');
+  assert.equal(initialSummary.totalTooltip, '3 problemas en total (1 aviso, 2 errores)');
 
   const afterDismiss = INITIAL_PROBLEMS.slice(1);
   const nextSummary = computeProblemsSummary(afterDismiss);
@@ -54,7 +55,8 @@ test('single source of truth for problems computes coherent counters and updates
   assert.equal(nextSummary.warnings, 0);
   assert.equal(nextSummary.errors, 2);
   assert.equal(nextSummary.statusText, '2 problemas · ⚠ 0 avisos · ✖ 2 errores');
-  assert.equal(nextSummary.badgeText, '⚠ 2');
+  assert.equal(nextSummary.badgeText, 'Σ 2');
+  assert.equal(nextSummary.totalTooltip, '2 problemas en total (0 avisos, 2 errores)');
 });
 
 test('TokenKind::Diagnostic validates 3-consonant roots', () => {

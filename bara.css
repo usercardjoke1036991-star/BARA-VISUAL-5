@@ -221,11 +221,31 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   order: 2; border-right: none !important;
 }
 
-/* 3. Pastilla verde «kernel activo» en la barra de estado */
+/* 3. Pastilla verde «kernel activo» y contador de total Σ N con tooltip en la barra de estado */
+.status { overflow: visible; }
 .status-pill-green {
   display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px;
   background: #17261b; border: 1px solid #2a4a32; color: var(--green-soft);
   font-size: 13px; font-weight: 500;
+}
+.status-total-counter {
+  position: relative; cursor: pointer; color: var(--text); font-weight: 600;
+  display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px;
+  background: #141c24; border: 1px solid var(--border);
+}
+.status-total-counter:hover, .status-total-counter:focus-visible {
+  border-color: var(--green-mid); color: var(--green-soft);
+}
+.status-total-tooltip {
+  display: none; position: absolute; bottom: calc(100% + 6px); left: 0;
+  background: #101419; border: 1px solid var(--green-mid); color: var(--text);
+  padding: 5px 10px; border-radius: 6px; font-size: 14px; font-weight: 500;
+  white-space: nowrap; z-index: 10000; pointer-events: none;
+}
+.status-total-counter:hover .status-total-tooltip,
+.status-total-counter:focus-visible .status-total-tooltip,
+.status-total-counter.show-tooltip .status-total-tooltip {
+  display: inline-block;
 }
 
 /* 6. Diagnósticos en el editor (subrayado ondulado + tooltip) */
@@ -255,7 +275,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   background: var(--hover); color: var(--green-soft);
 }
 
-/* 8. Toggle activo en Ajustes (Modo estricto) */
+/* 8. Toggle activo en Ajustes (Modo estricto / Autoguardado) */
 .toggle { cursor: pointer; padding: 0; }
 .toggle.on { background: var(--green-dim); border-color: var(--green-mid); }
 .toggle.on::after { left: 20px; background: #fff; }
+

@@ -89,12 +89,16 @@ export function computeProblemsSummary(problemsList) {
   const total = list.length;
   const warnings = list.filter(p => p.severity === 'aviso').length;
   const errors = list.filter(p => p.severity === 'error').length;
+  const probWord = total === 1 ? 'problema' : 'problemas';
+  const warnWord = warnings === 1 ? 'aviso' : 'avisos';
+  const errWord = errors === 1 ? 'error' : 'errores';
   return {
     total,
     warnings,
     errors,
-    statusText: `${total} ${total === 1 ? 'problema' : 'problemas'} · ⚠ ${warnings} ${warnings === 1 ? 'aviso' : 'avisos'} · ✖ ${errors} ${errors === 1 ? 'error' : 'errores'}`,
-    badgeText: `⚠ ${total}`
+    statusText: `${total} ${probWord} · ⚠ ${warnings} ${warnWord} · ✖ ${errors} ${errWord}`,
+    badgeText: `Σ ${total}`,
+    totalTooltip: `${total} ${probWord} en total (${warnings} ${warnWord}, ${errors} ${errWord})`
   };
 }
 
