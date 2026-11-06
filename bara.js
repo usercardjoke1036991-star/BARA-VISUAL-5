@@ -16,6 +16,11 @@ import {
   filterProblems,
   filterRegistros,
   computeAcceptButtonState,
+  computeReviewCardState,
+  applyReviewCardAction,
+  getNextProblem,
+  SCREENS_WITH_BOTTOM_PANEL,
+  UNAVAILABLE_BOTTOM_PANEL_TOAST,
   validateGithubUrl
 } from './bara-logic.js';
 
@@ -51,6 +56,7 @@ let aiProvider = 'DeepSeek';
 let errorBannerVisible = false;
 let activeEditorFile = 'HELLO.bara';
 let activeDiagLine = null;
+let activeProblemId = null;
 let highlightedLine = null;
 let highlightLineTimer = null;
 let activeProblemsFilter = 'todos';
@@ -66,7 +72,7 @@ let gitRemoteUrl = 'https://gitlab.com/vexor/genesis_engine.git';
 // Un solo origen de datos para los problemas (barra de estado, contador Σ N y panel Problemas)
 let activeProblems = INITIAL_PROBLEMS.map(p => ({ ...p }));
 
-// Registros dinámicos: conserva todos los de VISUAL-4 y añade líneas de Aceptar / Deshacer / Rechazar sin borrar previas
+// Registros dinámicos: conserva todos los de VISUAL-4 y añade líneas de Aceptar / Deshacer / Rechazar / Deshacer rechazo sin borrar previas
 const BASE_REGISTROS = [
   { time: '10:31:02', level: 'INFO', color: 'var(--green-soft)', text: 'Carpeta abierta: genesis_engine' },
   { time: '10:31:04', level: 'INFO', color: 'var(--green-soft)', text: 'Kernel conectado · fa3d308' },
@@ -378,7 +384,7 @@ function buildProblemsTableHtml() {
   };
 
   const rowsHtml = filtered.map(p => {
-    const isSelected = activeEditorFile === p.file && activeDiagLine === p.line;
+    const isSelected = (activeProblemId === p.id) || (activeEditorFile === p.file && activeDiagLine === p.line);
     return `
     <div class="problem-row ${isSelected ? 'selected-row' : ''}" role="button" tabindex="0" data-prob-id="${p.id}" data-file="${p.file}" data-line="${p.line}" data-col="${p.col}" aria-label="${p.location} ${p.message} (${p.severity})" style="display:grid;grid-template-columns:minmax(130px,auto) 1fr auto auto;gap:10px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border2);font-size:14px;cursor:pointer;">
       <span class="mono" style="color:var(--green-soft)">${p.location}</span>
@@ -410,7 +416,7 @@ function buildBottomDockHtml() {
     <div style="height:36px;display:flex;align-items:center;padding:0 6px;border-bottom:${bottomPanelFolded ? 'none' : '1px solid var(--border)'};gap:2px;min-width:0">
       <div id="bp-tab-problemas" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;background:var(--hover);border-radius:4px;color:#fff;font-weight:600;cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Problemas (${summary.total})</div>
       <div id="bp-tab-registros" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Registros</div>
-      <div id="bp-tab-terminal" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto">Terminal kernel</div>
+      <div id="bp-tab-terminal" class="bp-tab" role="button" tabindex="0" title="Terminal kernel" aria-label="Terminal kernel" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto">Terminal<span class="bp-tab-kernel-suffix"> kernel</span></div>
       <button type="button" id="bp-more-tabs-btn" class="dock-ctrl-btn" aria-label="Más pestañas" aria-haspopup="menu" aria-expanded="false" title="Más pestañas (»)" style="padding:0 7px;width:auto;font-weight:700;color:var(--green-soft)">»</button>
       <div style="margin-left:auto;display:flex;gap:2px;align-items:center;flex-shrink:0">
         <button type="button" id="bp-btn-minimize" class="dock-ctrl-btn" aria-label="${minTitle}" title="${minTitle}">${SVG.minimize(16)}</button>
@@ -424,35 +430,27 @@ function buildBottomDockHtml() {
   </div>`;
 }
 
-// 1. RECUPERAR la tarjeta de revisión de cambio en el Chat («Revisión de cambio · HELLO.bara»)
+// 1 & 2. Tarjeta de revisión de cambio en el Chat («Revisión de cambio · HELLO.bara»)
 function buildChatReviewCardHtml() {
-  const acceptState = computeAcceptButtonState({
-    patchVerified: reviewCardVerified,
-    strictMode
+  const viewState = computeReviewCardState({
+    reviewCardVerified,
+    strictMode,
+    unverifiedAccepted,
+    unverifiedRejected
   });
 
-  let statusPill = '';
-  if (unverifiedRejected) {
-    statusPill = `<span id="review-card-status-pill" class="chip chip-muted" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">Rechazado</span>`;
-  } else if (reviewCardVerified) {
-    statusPill = `<span id="review-card-status-pill" class="chip" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">Verificado</span>`;
-  } else {
-    statusPill = `<span id="review-card-status-pill" class="chip chip-danger" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">No verificado</span>`;
-  }
+  const statusPill = `<span id="review-card-status-pill" class="${viewState.statusChipClass}" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">${viewState.statusLabel}</span>`;
 
   let actionAreaHtml = '';
-  if (unverifiedAccepted) {
+  if (viewState.showUndo) {
     actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#152018;border:1px solid var(--green-mid);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:8px">
       <span style="font-size:14px">Cambio aceptado en <span class="mono">HELLO.bara</span> · respaldo <span class="mono">${unverifiedAcceptedTimestamp}</span></span>
       <button type="button" id="btn-unverified-undo" class="btn btn-ghost" style="padding:3px 10px;flex-shrink:0">Deshacer</button>
     </div>`;
-  } else if (unverifiedRejected) {
+  } else if (viewState.showUndoReject) {
     actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#141a21;border:1px solid var(--border);border-radius:8px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;gap:8px">
       <span style="font-size:14px">Cambio rechazado en <span class="mono">HELLO.bara</span></span>
-      <div class="row" style="gap:6px">
-        <button type="button" id="btn-unverified-accept" class="btn btn-danger" style="padding:3px 10px" ${acceptState.disabled ? 'disabled aria-disabled="true" title="Modo estricto: verifica antes de aceptar"' : ''}>Aceptar</button>
-        <button type="button" id="btn-unverified-reject" class="btn btn-ghost" style="padding:3px 10px">Rechazar</button>
-      </div>
+      <button type="button" id="btn-unverified-undo-reject" class="btn btn-ghost" style="padding:3px 10px;flex-shrink:0">Deshacer rechazo</button>
     </div>`;
   } else if (!reviewCardVerified) {
     actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#2a1515;border:1px solid var(--danger);border-radius:8px;color:#f0b0b0;display:flex;flex-direction:column;gap:5px">
@@ -462,11 +460,11 @@ function buildChatReviewCardHtml() {
           <span>Este cambio NO está verificado</span>
         </div>
         <div class="row" style="gap:6px">
-          <button type="button" id="btn-unverified-accept" class="btn btn-danger" style="padding:3px 10px" ${acceptState.disabled ? 'disabled aria-disabled="true" title="Modo estricto: verifica antes de aceptar"' : ''}>Aceptar</button>
+          <button type="button" id="btn-unverified-accept" class="btn btn-danger" style="padding:3px 10px" ${viewState.acceptDisabled ? 'disabled aria-disabled="true" title="Modo estricto: verifica antes de aceptar"' : ''}>Aceptar</button>
           <button type="button" id="btn-unverified-reject" class="btn btn-ghost" style="padding:3px 10px">Rechazar</button>
         </div>
       </div>
-      ${acceptState.disabled ? `<div id="strict-mode-block-msg" style="font-size:14px;color:#ffd0d0">${acceptState.explanation}</div>` : ''}
+      ${viewState.acceptDisabled ? `<div id="strict-mode-block-msg" style="font-size:14px;color:#ffd0d0">${viewState.strictExplanation}</div>` : ''}
     </div>`;
   } else {
     actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;gap:8px">
@@ -497,6 +495,7 @@ function buildChatReviewCardHtml() {
   </div>`;
 }
 
+// 4. Pantalla 06 restaurada a V4: sin subcabecera «HELLO.bara» y con max-width:440px en las burbujas
 function getScreen06Html() {
   const acceptState = computeAcceptButtonState({
     patchVerified: false,
@@ -508,19 +507,16 @@ function getScreen06Html() {
         <strong>Chat</strong>
         <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
       </div>
-      <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
-        <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
-        <span class="mono" style="color:var(--text)">HELLO.bara</span>
-      </div>
       <div style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
-        <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">Añade mostrar_todo()</div>
-        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">
-          <div style="margin-bottom:6px">Parche propuesto (sin verificación del kernel).</div>
+        <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:440px">Añade mostrar_todo()</div>
+        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:12px 14px;border-radius:12px;max-width:440px">
+          <div style="margin-bottom:8px">Parche propuesto (sin verificación del kernel).</div>
           <span class="chip-danger chip" style="display:inline-flex">Código inventado: la función mostrar_todo() no existe</span>
         </div>
         ${buildChatReviewCardHtml()}
       </div>
       ${COMPOSER_HTML}
+      ${bottomPanelOpen ? buildBottomDockHtml() : ''}
     </section>
     <aside class="editor-pane">
       <div class="banner banner-warn" role="status" style="justify-content:space-between">
@@ -538,18 +534,18 @@ function getScreen06Html() {
     </aside>`;
 }
 
-// C.4 & F: AJUSTES con dimensiones V4 (padding 18/28, gaps 16 y 12, Prompt 64px, clave •••• mono, sin ▾ doble) + toggles Offline/GGUF accesibles
+// 4. Ajustes (13) con valores exactos de V4 (4d2e7bf): 20 puntos en Clave conexión y márgenes restaurados (12→14, 6→10, 8→12, 4→8, 12→16)
 function getScreen13Html() {
   const isLocal = aiProvider === 'Modelo local (GGUF)';
   const isGgufOn = ggufMode || isLocal;
   return `<main class="main" style="padding:18px 28px;background:#08090a;overflow:auto">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
         <h1 style="margin:0;font-size:22px;color:#fff">Ajustes</h1>
         <span class="chip">Conexión OK</span>
         <span class="chip mono">Versión ${APP_VERSION}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:980px">
-        <div class="card" style="display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="display:flex;flex-direction:column;gap:14px">
           <div class="row" style="justify-content:space-between">
             <span>Offline</span>
             <button type="button" id="toggle-offline" role="switch" aria-checked="${offlineMode ? 'true' : 'false'}" aria-label="Offline" class="toggle ${offlineMode ? 'on' : ''}"></button>
@@ -582,7 +578,7 @@ function getScreen13Html() {
           </div>
           <div>
             <label class="label">Clave conexión</label>
-            <div class="field mono" style="color:var(--muted)">••••</div>
+            <div class="field mono" style="color:var(--muted)">••••••••••••••••••••</div>
             <label id="label-remember-key" class="row" style="margin-top:8px;color:var(--muted);cursor:pointer" role="checkbox" aria-checked="${rememberKey ? 'true' : 'false'}" tabindex="0">
               <span id="check-remember-key" class="check ${rememberKey ? 'on' : ''}">${rememberKey ? '✓' : ''}</span> Recordar clave en llavero local
             </label>
@@ -596,39 +592,39 @@ function getScreen13Html() {
             <div class="field mono" style="font-size:14px">https://api.deepseek.com/v1</div>
           </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;flex-direction:column;gap:14px">
           <div class="card" style="border-style:dashed">
-            <div style="font-weight:600;margin-bottom:6px">Avanzado</div>
+            <div style="font-weight:600;margin-bottom:10px">Avanzado</div>
             <div class="row" style="justify-content:space-between;margin-bottom:6px">
               <span>Temperatura</span>
               <span class="mono">0.2</span>
             </div>
-            <div style="height:6px;background:#1e2a38;border-radius:999px;margin-bottom:8px">
+            <div style="height:6px;background:#1e2a38;border-radius:999px;margin-bottom:12px">
               <div style="width:20%;height:100%;background:var(--green-soft);border-radius:999px"></div>
             </div>
             <div>
               <label class="label">Máximo de tokens</label>
               <div class="field mono">4096</div>
             </div>
-            <div style="margin-top:6px">
+            <div style="margin-top:10px">
               <label class="label">Prompt del sistema</label>
               <div class="field" style="min-height:64px">Eres el asistente oficial del lenguaje Bara.</div>
             </div>
           </div>
           <div class="card">
-            <div style="font-weight:600;margin-bottom:6px">Carpeta de confianza</div>
+            <div style="font-weight:600;margin-bottom:10px">Carpeta de confianza</div>
             <div style="display:flex;align-items:center;gap:8px">
               <input id="trusted-folder-input" class="field mono" readonly value="${trustedFolder}" aria-label="Carpeta de confianza"/>
               <button type="button" id="btn-change-trusted-folder" class="btn btn-ghost" style="flex-shrink:0">Cambiar…</button>
             </div>
           </div>
           <div class="card">
-            <div style="font-weight:600;margin-bottom:6px">Ajustes de interfaz</div>
-            <div class="row" style="justify-content:space-between;margin-bottom:4px">
+            <div style="font-weight:600;margin-bottom:10px">Ajustes de interfaz</div>
+            <div class="row" style="justify-content:space-between;margin-bottom:8px">
               <span>Tamaño de letra</span>
               <span class="mono">14 px mínimo</span>
             </div>
-            <div class="row" style="justify-content:space-between;margin-bottom:4px">
+            <div class="row" style="justify-content:space-between;margin-bottom:8px">
               <span>Tema</span>
               <span>Oscuro (BARA)</span>
             </div>
@@ -639,7 +635,7 @@ function getScreen13Html() {
           </div>
         </div>
       </div>
-      <div class="row" style="margin-top:12px;gap:10px">
+      <div class="row" style="margin-top:16px;gap:10px">
         <button class="btn btn-primary">${SVG.save(16)} Guardar</button>
         <button class="btn btn-ghost">Valores de fábrica</button>
         <button class="btn btn-danger">Olvidar</button>
@@ -666,8 +662,7 @@ function getScreen12Html() {
     ? 'background:var(--green-dim);color:#fff;border-color:var(--green-mid);cursor:pointer'
     : 'cursor:pointer';
 
-  return `<main class="main" style="padding:22px 32px;background:#08090a">
-    <h1 style="margin:0 0 14px;font-size:22px;color:var(--green-soft)">Registros</h1>
+  const bodyHtml = `<h1 style="margin:0 0 14px;font-size:22px;color:var(--green-soft)">Registros</h1>
     <div class="row" style="margin-bottom:14px;flex-wrap:wrap">
       <button type="button" class="chip reg-filter-chip" data-reg-level="todo" style="${chipStyle('todo')}">Todo</button>
       <button type="button" class="chip reg-filter-chip" data-reg-level="errores" style="${chipStyle('errores')}">Errores</button>
@@ -677,9 +672,20 @@ function getScreen12Html() {
     </div>
     <div id="registros-list-card" class="card" style="max-width:1000px;font-size:14px;line-height:1.5">
       ${renderFilteredRegistrosRows()}
-    </div>
+    </div>`;
+
+  if (bottomPanelOpen) {
+    return `<main class="main" style="background:#08090a">
+      <div style="flex:1;min-height:0;overflow:auto;padding:22px 32px">${bodyHtml}</div>
+      ${buildBottomDockHtml()}
+    </main>`;
+  }
+
+  return `<main class="main" style="padding:22px 32px;background:#08090a">
+    ${bodyHtml}
   </main>`;
 }
+
 
 const SCREENS = {
   "01": {
@@ -814,15 +820,15 @@ const SCREENS = {
           <span class="mono" style="color:var(--text)">${activeEditorFile}</span>
         </div>
         <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
-          <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
+          <div style="padding:10px 12px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
             <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
             <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
             <div style="color:var(--green-soft)">✓ Confirmé firma</div>
           </div>
           <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">¿Qué hace este código?</div>
-          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">
-            <p style="margin:0 0 6px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
-            <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
+          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:12px 14px;border-radius:12px;max-width:420px">
+            <p style="margin:0 0 8px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
+            <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
           </div>
           ${buildChatReviewCardHtml()}
         </div>
@@ -839,7 +845,8 @@ const SCREENS = {
     "id": "04",
     "rail": "Chat",
     "label": "04 · Cambio propuesto (diff)",
-    "html": `${SIDEBAR_HTML}
+    get html() {
+      return `${SIDEBAR_HTML}
     <section class="main" style="border-right:1px solid var(--border)">
       <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail)">
         <strong>Chat</strong>
@@ -854,6 +861,7 @@ const SCREENS = {
         </div>
       </div>
       ${COMPOSER_HTML}
+      ${bottomPanelOpen ? buildBottomDockHtml() : ''}
     </section>
     <aside class="editor-pane">
       <div style="padding:10px 12px;border-bottom:1px solid var(--border);background:#122018;display:flex;flex-direction:column;gap:8px;flex-shrink:0">
@@ -874,13 +882,15 @@ const SCREENS = {
         <div class="gutter"><div>1</div><div>2</div><div>3</div><div>4</div><div>4</div><div>5</div><div>6</div><div>6</div><div>7</div></div>
         <div class="code-body"><div>funcion main() {</div><div>  variables x = 10</div><div>  si x &gt; 5 {</div><div class="diff-del">-   mostrar("hola")</div><div class="diff-add">+   mostrar("Bara IDE")</div><div class="diff-add">+   registrar("ok")</div><div class="diff-add">+   devolver x</div><div>  }</div><div>}</div></div>
       </div>
-    </aside>`
+    </aside>`;
+    }
   },
   "05": {
     "id": "05",
     "rail": "Chat",
     "label": "05 · Cambio aplicado",
-    "html": `${SIDEBAR_HTML}
+    get html() {
+      return `${SIDEBAR_HTML}
     <section class="main" style="border-right:1px solid var(--border);position:relative">
       <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail)">
         <strong>Chat</strong>
@@ -892,6 +902,7 @@ const SCREENS = {
         </div>
       </div>
       ${COMPOSER_HTML}
+      ${bottomPanelOpen ? buildBottomDockHtml() : ''}
     </section>
     <aside class="editor-pane">
       ${buildTabbar(false)}
@@ -906,7 +917,8 @@ const SCREENS = {
           <button type="button" id="toast-close-btn" class="icon-close-btn" aria-label="Cerrar notificación">${SVG.close(16)}</button>
         </div>
       </div>
-    </aside>`
+    </aside>`;
+    }
   },
   "06": {
     "id": "06",
@@ -920,8 +932,8 @@ const SCREENS = {
     "id": "07",
     "rail": "Herramientas",
     "label": "07 · Herramientas hub",
-    "html": `<main class="main" style="padding:24px 32px;background:#08090a">
-      <h1 style="margin:0 0 6px;font-size:22px;color:#fff">Herramientas</h1>
+    get html() {
+      const inner = `<h1 style="margin:0 0 6px;font-size:22px;color:#fff">Herramientas</h1>
       <p style="margin:0 0 18px;color:var(--muted)">Acceso a las funciones del IDE fuera del rail principal.</p>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:980px">
         <div class="card tool-card" role="button" tabindex="0" data-tool="08" style="min-height:110px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
@@ -959,14 +971,22 @@ const SCREENS = {
           </div>
           <div style="color:var(--muted);font-size:14px;line-height:1.45">Ventana de ayuda y documentación contextual</div>
         </div>
-      </div>
-    </main>`
+      </div>`;
+      if (bottomPanelOpen) {
+        return `<main class="main" style="background:#08090a">
+          <div style="flex:1;min-height:0;overflow:auto;padding:24px 32px">${inner}</div>
+          ${buildBottomDockHtml()}
+        </main>`;
+      }
+      return `<main class="main" style="padding:24px 32px;background:#08090a">${inner}</main>`;
+    }
   },
   "08": {
     "id": "08",
     "rail": "Herramientas",
     "label": "08 · Constructor visual",
-    "html": `${SIDEBAR_HTML}
+    get html() {
+      return `${SIDEBAR_HTML}
     <section class="main">
       <div style="height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail);flex-shrink:0">
         <strong style="font-size:16px">Constructor visual</strong>
@@ -1021,14 +1041,16 @@ const SCREENS = {
           </div>
         </aside>
       </div>
-    </section>`
+      ${bottomPanelOpen ? buildBottomDockHtml() : ''}
+    </section>`;
+    }
   },
   "09": {
     "id": "09",
     "rail": "Herramientas",
     "label": "09 · Topología",
-    "html": `<main class="main" style="flex-direction:row;background:#08090a">
-      <div style="width:200px;flex-shrink:0;border-right:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px">
+    get html() {
+      const columnsHtml = `<div style="width:200px;flex-shrink:0;border-right:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px">
         <strong style="font-size:16px">Topología</strong>
         <div id="topology-scope-selector" style="display:flex;background:#0d1218;border:1px solid var(--border);border-radius:999px;overflow:hidden">
           <div id="topology-seg-proyecto" role="button" tabindex="0" data-scope="proyecto" style="flex:1;text-align:center;padding:7px;background:var(--green-dim);color:#fff;font-weight:600;cursor:pointer;font-size:14px">Proyecto</div>
@@ -1064,16 +1086,23 @@ const SCREENS = {
         </div>
         <button class="btn btn-ghost" style="justify-content:center">Abrir en el editor</button>
         <button class="btn btn-primary" style="justify-content:center">Actualizar grafo</button>
-      </div>
-    </main>`
+      </div>`;
+
+      if (bottomPanelOpen) {
+        return `<main class="main" style="flex-direction:column;background:#08090a">
+          <div style="flex:1;min-height:0;min-width:0;display:flex;flex-direction:row">${columnsHtml}</div>
+          ${buildBottomDockHtml()}
+        </main>`;
+      }
+      return `<main class="main" style="flex-direction:row;background:#08090a">${columnsHtml}</main>`;
+    }
   },
   "10": {
     "id": "10",
     "rail": "Herramientas",
     "label": "10 · Git",
     get html() {
-      return `<main class="main" style="padding:20px 28px;background:#08090a;position:relative">
-        <h1 style="margin:0 0 14px;font-size:22px;color:#fff">Git · control de versiones</h1>
+      const innerGit = `<h1 style="margin:0 0 14px;font-size:22px;color:#fff">Git · control de versiones</h1>
         <div style="display:grid;grid-template-columns:1.1fr 0.9fr;gap:16px;max-width:980px">
           <div class="card">
             <div style="font-weight:600;margin-bottom:10px">Archivos cambiados</div>
@@ -1126,8 +1155,15 @@ const SCREENS = {
               <button class="btn btn-primary">Confirmar commit</button>
             </div>
           </div>
-        </div>
-      </main>`;
+        </div>`;
+
+      if (bottomPanelOpen) {
+        return `<main class="main" style="background:#08090a;position:relative">
+          <div style="flex:1;min-height:0;overflow:auto;padding:20px 28px;position:relative">${innerGit}</div>
+          ${buildBottomDockHtml()}
+        </main>`;
+      }
+      return `<main class="main" style="padding:20px 28px;background:#08090a;position:relative">${innerGit}</main>`;
     }
   },
   "11": {
@@ -1146,15 +1182,15 @@ const SCREENS = {
           <span class="mono" style="color:var(--text)">${activeEditorFile}</span>
         </div>
         <div id="chat-messages-scroll" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
-          <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
+          <div style="padding:10px 12px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
             <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
             <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
             <div style="color:var(--green-soft)">✓ Confirmé firma</div>
           </div>
           <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">¿Qué hace este código?</div>
-          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 14px;border-radius:12px;max-width:420px">
-            <p style="margin:0 0 6px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
-            <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
+          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:12px 14px;border-radius:12px;max-width:420px">
+            <p style="margin:0 0 8px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
+            <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
           </div>
           ${buildChatReviewCardHtml()}
         </div>
@@ -1239,7 +1275,7 @@ const SCREENS = {
 let currentScreenId = '01';
 let previousScreenId = '01';
 let bottomPanelOpen = false;
-let bottomPanelFolded = false;
+let bottomPanelFolded = typeof window !== 'undefined' && window.innerWidth < 1100;
 let ephemeralToastTimer = null;
 
 function showEphemeralToast(message) {
@@ -1383,6 +1419,7 @@ function setErrorBannerVisible(visible) {
 
 function dismissProblemById(probId) {
   activeProblems = activeProblems.filter(p => p.id !== probId);
+  if (activeProblemId === probId) activeProblemId = null;
   syncShellAdditions();
   renderScreen(currentScreenId);
 }
@@ -1390,6 +1427,7 @@ function dismissProblemById(probId) {
 function resetProblems() {
   activeProblems = INITIAL_PROBLEMS.map(p => ({ ...p }));
   activeProblemsFilter = 'todos';
+  activeProblemId = null;
   syncShellAdditions();
   renderScreen(currentScreenId);
 }
@@ -1451,20 +1489,38 @@ function syncShellAdditions() {
   }
 }
 
+function focusProblemRowById(probId) {
+  if (!probId) return;
+  const rowEl = document.querySelector(`.problem-row[data-prob-id="${probId}"]`);
+  if (rowEl && typeof rowEl.focus === 'function') {
+    rowEl.focus();
+  }
+}
+
 window.BaraIDE = {
   version: APP_VERSION,
   topologyScope: 'proyecto',
-  jumpToLine(file, line) {
+  // 6. Al saltar a una línea desde el Panel Problemas, después de 1.5 s el foco vuelve a la fila de Problemas
+  jumpToLine(file, line, probId = null) {
     activeEditorFile = file || 'HELLO.bara';
     activeDiagLine = line;
     highlightedLine = line;
+    const matchedProb = probId
+      ? activeProblems.find(p => p.id === probId)
+      : activeProblems.find(p => p.file === activeEditorFile && p.line === line);
+    const targetProbId = matchedProb ? matchedProb.id : probId;
+    if (targetProbId) activeProblemId = targetProbId;
+
     if (highlightLineTimer) clearTimeout(highlightLineTimer);
     renderScreen(currentScreenId);
+    focusProblemRowById(targetProbId);
+
     highlightLineTimer = setTimeout(() => {
       highlightedLine = null;
       document.querySelectorAll('.code-line-highlight').forEach(el => {
         el.classList.remove('code-line-highlight');
       });
+      focusProblemRowById(targetProbId);
     }, 1500);
   },
   showToast: showEphemeralToast,
@@ -1475,6 +1531,19 @@ window.BaraIDE = {
   dismissProblemById,
   resetProblems
 };
+
+// 6. Alt+↓ / F8 («siguiente problema») y Shift+F8 («anterior»): saltan en el editor y mueven el foco de la fila
+function navigateProblemByStep(direction = 1) {
+  const filtered = filterProblems(activeProblems, activeProblemsFilter);
+  const list = filtered.length > 0 ? filtered : activeProblems;
+  const nextProb = getNextProblem(list, activeProblemId, direction);
+  if (!nextProb) return;
+  if (!bottomPanelOpen && currentScreenId !== '11') {
+    bottomPanelOpen = true;
+    bottomPanelFolded = false;
+  }
+  window.BaraIDE.jumpToLine(nextProb.file, nextProb.line, nextProb.id);
+}
 
 function bindKeyboardRoleButton(el, handler) {
   if (!el) return;
@@ -1566,6 +1635,7 @@ function renderScreen(screenId) {
     previousScreenId = currentScreenId;
     if (screenId === '11') {
       bottomPanelOpen = true;
+      bottomPanelFolded = window.innerWidth < 1100;
     } else if (screenId !== '03') {
       bottomPanelOpen = false;
     }
@@ -1615,16 +1685,20 @@ function renderScreen(screenId) {
   }
 }
 
-// B.6: Ctrl+J solo pliega o despliega el panel inferior. NO cambia de pantalla.
+// 5. Ctrl+J abre y pliega el panel inferior en todas las pantallas donde exista; muestra toast si no está disponible. NO cambia de pantalla.
 function toggleBottomPanel() {
   closeMoreTabsPortal(false);
+  if (!SCREENS_WITH_BOTTOM_PANEL.includes(currentScreenId)) {
+    showEphemeralToast(UNAVAILABLE_BOTTOM_PANEL_TOAST);
+    return;
+  }
   const existingDock = document.getElementById('bottom-dock');
   if (existingDock) {
     bottomPanelFolded = !bottomPanelFolded;
     renderScreen(currentScreenId);
   } else {
     bottomPanelOpen = true;
-    bottomPanelFolded = false;
+    bottomPanelFolded = window.innerWidth < 1100;
     renderScreen(currentScreenId);
   }
 }
@@ -1652,21 +1726,22 @@ function bindProblemRowEvents() {
 
   const rows = Array.from(document.querySelectorAll('.problem-row'));
   rows.forEach((row, idx) => {
+    const probId = row.getAttribute('data-prob-id');
     const file = row.getAttribute('data-file') || 'HELLO.bara';
     const line = parseInt(row.getAttribute('data-line') || '1', 10);
     row.onclick = (e) => {
       if (e.target && e.target.closest('.btn-dismiss-problem')) return;
-      window.BaraIDE.jumpToLine(file, line);
+      window.BaraIDE.jumpToLine(file, line, probId);
     };
     row.onkeydown = (e) => {
       if (e.target && e.target.closest('.btn-dismiss-problem')) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        window.BaraIDE.jumpToLine(file, line);
-      } else if (e.key === 'ArrowDown') {
+        window.BaraIDE.jumpToLine(file, line, probId);
+      } else if (e.key === 'ArrowDown' && !e.altKey) {
         e.preventDefault();
         rows[(idx + 1) % rows.length]?.focus();
-      } else if (e.key === 'ArrowUp') {
+      } else if (e.key === 'ArrowUp' && !e.altKey) {
         e.preventDefault();
         rows[(idx - 1 + rows.length) % rows.length]?.focus();
       }
@@ -1695,6 +1770,19 @@ function bindProblemRowEvents() {
   });
 }
 
+function handleReviewCardAction(action) {
+  const result = applyReviewCardAction(
+    action,
+    { reviewCardVerified, strictMode, unverifiedAccepted, unverifiedRejected },
+    appendedRegistros,
+    unverifiedAcceptedTimestamp
+  );
+  reviewCardVerified = result.state.reviewCardVerified;
+  unverifiedAccepted = result.state.unverifiedAccepted;
+  unverifiedRejected = result.state.unverifiedRejected;
+  appendedRegistros = result.registros;
+}
+
 function bindScreenInteractions() {
   // Auto-Apply checkbox (desmarcado por defecto, clicable)
   const autoApplyCheck = document.getElementById('auto-apply-checkbox');
@@ -1706,7 +1794,7 @@ function bindScreenInteractions() {
     };
   }
 
-  // B.5: Tarjeta de revisión en el Chat: Aceptar, Deshacer y Rechazar registran en Registros sin borrar líneas previas
+  // 2. Tarjeta de revisión en el Chat: Aceptar, Deshacer, Rechazar y Deshacer rechazo
   const reviewPill = document.getElementById('review-card-status-pill');
   if (reviewPill) {
     bindKeyboardRoleButton(reviewPill, () => {
@@ -1719,28 +1807,14 @@ function bindScreenInteractions() {
   if (unvAccept) {
     unvAccept.onclick = () => {
       if (!reviewCardVerified && strictMode) return;
-      unverifiedAccepted = true;
-      unverifiedRejected = false;
-      appendedRegistros.push({
-        time: '10:33:00',
-        level: 'INFO',
-        color: 'var(--green-soft)',
-        text: `Cambio aceptado en HELLO.bara · respaldo ${unverifiedAcceptedTimestamp}`
-      });
+      handleReviewCardAction('accept');
       renderScreen(currentScreenId);
     };
   }
   const unvReject = document.getElementById('btn-unverified-reject');
   if (unvReject) {
     unvReject.onclick = () => {
-      unverifiedAccepted = false;
-      unverifiedRejected = true;
-      appendedRegistros.push({
-        time: '10:33:10',
-        level: 'AVISO',
-        color: '#c9a227',
-        text: 'Cambio rechazado en HELLO.bara'
-      });
+      handleReviewCardAction('reject');
       showEphemeralToast('Cambio rechazado');
       renderScreen(currentScreenId);
     };
@@ -1748,14 +1822,14 @@ function bindScreenInteractions() {
   const unvUndo = document.getElementById('btn-unverified-undo');
   if (unvUndo) {
     unvUndo.onclick = () => {
-      unverifiedAccepted = false;
-      unverifiedRejected = false;
-      appendedRegistros.push({
-        time: '10:33:05',
-        level: 'INFO',
-        color: 'var(--green-soft)',
-        text: `Cambio deshecho en HELLO.bara · restaurado respaldo ${unverifiedAcceptedTimestamp}`
-      });
+      handleReviewCardAction('undo');
+      renderScreen(currentScreenId);
+    };
+  }
+  const unvUndoReject = document.getElementById('btn-unverified-undo-reject');
+  if (unvUndoReject) {
+    unvUndoReject.onclick = () => {
+      handleReviewCardAction('undo-reject');
       renderScreen(currentScreenId);
     };
   }
@@ -2001,6 +2075,7 @@ function bindScreenInteractions() {
       btn.id === 'btn-unverified-accept' ||
       btn.id === 'btn-unverified-reject' ||
       btn.id === 'btn-unverified-undo' ||
+      btn.id === 'btn-unverified-undo-reject' ||
       btn.id === 'btn-verify-remote-url' ||
       btn.id === 'btn-change-trusted-folder' ||
       btn.classList.contains('btn-dismiss-problem')
@@ -2114,6 +2189,8 @@ window.renderScreen = renderScreen;
 window.updateTopologyScope = updateTopologyScope;
 window.setErrorBannerVisible = setErrorBannerVisible;
 window.toggleEditorFirstLayout = toggleEditorFirstLayout;
+window.toggleBottomPanel = toggleBottomPanel;
+window.navigateProblemByStep = navigateProblemByStep;
 window.openMoreTabsPortal = openMoreTabsPortal;
 window.closeMoreTabsPortal = closeMoreTabsPortal;
 window.setStrictMode = (val) => {
@@ -2171,6 +2248,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindKeyboardRoleButton(diagTrigger, () => {
       activeDiagLine = 4;
       bottomPanelOpen = true;
+      bottomPanelFolded = window.innerWidth < 1100;
       renderScreen('11');
     });
   }
@@ -2203,6 +2281,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   window.addEventListener('keydown', (e) => {
+    // 6. F8 / Alt+↓ («siguiente problema») y Shift+F8 («anterior»)
+    if (e.key === 'F8') {
+      e.preventDefault();
+      navigateProblemByStep(e.shiftKey ? -1 : 1);
+      return;
+    }
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'ArrowDown') {
+      e.preventDefault();
+      navigateProblemByStep(1);
+      return;
+    }
     if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E')) {
       e.preventDefault();
       toggleEditorFirstLayout();
@@ -2283,3 +2372,4 @@ document.addEventListener('DOMContentLoaded', () => {
   else if (path.includes('problemas')) renderScreen('11');
   else renderScreen('01');
 });
+

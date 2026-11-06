@@ -172,6 +172,157 @@ export function computeAcceptButtonState({ patchVerified, strictMode }) {
 }
 
 /**
+ * Pure view state for the «Revisión de cambio · HELLO.bara» card in Chat.
+ * - When unverifiedRejected is true: status is «Rechazado» (.chip-muted),
+ *   Aceptar and Rechazar are hidden, and only «Deshacer rechazo» is shown.
+ * - When unverifiedAccepted is true: Aceptar and Rechazar are hidden,
+ *   and only «Deshacer» is shown.
+ */
+export function computeReviewCardState({
+  reviewCardVerified = false,
+  strictMode = false,
+  unverifiedAccepted = false,
+  unverifiedRejected = false
+} = {}) {
+  const acceptState = computeAcceptButtonState({
+    patchVerified: reviewCardVerified,
+    strictMode
+  });
+
+  if (unverifiedRejected) {
+    return {
+      statusLabel: 'Rechazado',
+      statusChipClass: 'chip chip-muted',
+      showAccept: false,
+      showReject: false,
+      showUndo: false,
+      showUndoReject: true,
+      acceptDisabled: acceptState.disabled,
+      strictExplanation: acceptState.explanation
+    };
+  }
+
+  if (unverifiedAccepted) {
+    return {
+      statusLabel: reviewCardVerified ? 'Verificado' : 'No verificado',
+      statusChipClass: reviewCardVerified ? 'chip' : 'chip chip-danger',
+      showAccept: false,
+      showReject: false,
+      showUndo: true,
+      showUndoReject: false,
+      acceptDisabled: acceptState.disabled,
+      strictExplanation: acceptState.explanation
+    };
+  }
+
+  return {
+    statusLabel: reviewCardVerified ? 'Verificado' : 'No verificado',
+    statusChipClass: reviewCardVerified ? 'chip' : 'chip chip-danger',
+    showAccept: true,
+    showReject: true,
+    showUndo: false,
+    showUndoReject: false,
+    acceptDisabled: acceptState.disabled,
+    strictExplanation: acceptState.explanation
+  };
+}
+
+/**
+ * Applies an action ('accept' | 'undo' | 'reject' | 'undo-reject') to the review card
+ * and appends the corresponding line to registros without deleting any previous line.
+ */
+export function applyReviewCardAction(
+  action,
+  state = {},
+  registros = [],
+  backupTimestamp = '2026-11-06_1033'
+) {
+  const prevLogs = Array.isArray(registros) ? [...registros] : [];
+  const nextState = {
+    reviewCardVerified: Boolean(state.reviewCardVerified),
+    strictMode: Boolean(state.strictMode),
+    unverifiedAccepted: Boolean(state.unverifiedAccepted),
+    unverifiedRejected: Boolean(state.unverifiedRejected)
+  };
+
+  if (action === 'accept') {
+    if (!nextState.reviewCardVerified && nextState.strictMode) {
+      return { state: nextState, registros: prevLogs, addedLog: null };
+    }
+    nextState.unverifiedAccepted = true;
+    nextState.unverifiedRejected = false;
+    const addedLog = {
+      time: '10:33:00',
+      level: 'INFO',
+      color: 'var(--green-soft)',
+      text: `Cambio aceptado en HELLO.bara · respaldo ${backupTimestamp}`
+    };
+    return { state: nextState, registros: [...prevLogs, addedLog], addedLog };
+  }
+
+  if (action === 'undo') {
+    nextState.unverifiedAccepted = false;
+    nextState.unverifiedRejected = false;
+    const addedLog = {
+      time: '10:33:05',
+      level: 'INFO',
+      color: 'var(--green-soft)',
+      text: `Cambio deshecho en HELLO.bara · restaurado respaldo ${backupTimestamp}`
+    };
+    return { state: nextState, registros: [...prevLogs, addedLog], addedLog };
+  }
+
+  if (action === 'reject') {
+    nextState.unverifiedAccepted = false;
+    nextState.unverifiedRejected = true;
+    const addedLog = {
+      time: '10:33:10',
+      level: 'AVISO',
+      color: '#c9a227',
+      text: 'Cambio rechazado en HELLO.bara'
+    };
+    return { state: nextState, registros: [...prevLogs, addedLog], addedLog };
+  }
+
+  if (action === 'undo-reject') {
+    nextState.unverifiedAccepted = false;
+    nextState.unverifiedRejected = false;
+    nextState.reviewCardVerified = false;
+    const addedLog = {
+      time: '10:33:15',
+      level: 'INFO',
+      color: 'var(--green-soft)',
+      text: 'Rechazo deshecho en HELLO.bara'
+    };
+    return { state: nextState, registros: [...prevLogs, addedLog], addedLog };
+  }
+
+  return { state: nextState, registros: prevLogs, addedLog: null };
+}
+
+/**
+ * Pure helper for F8 / Alt+↓ (direction = 1) and Shift+F8 (direction = -1)
+ * to cycle through the active problems list.
+ */
+export function getNextProblem(problemsList, currentProblemId = null, direction = 1) {
+  const list = Array.isArray(problemsList) ? problemsList : [];
+  if (list.length === 0) return null;
+  const step = direction < 0 ? -1 : 1;
+  const currentIdx = list.findIndex(p => p.id === currentProblemId);
+  if (currentIdx === -1) {
+    return step > 0 ? list[0] : list[list.length - 1];
+  }
+  const nextIdx = (currentIdx + step + list.length) % list.length;
+  return list[nextIdx];
+}
+
+export const SCREENS_WITH_BOTTOM_PANEL = [
+  '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'
+];
+
+export const UNAVAILABLE_BOTTOM_PANEL_TOAST = 'Panel inferior no disponible en esta vista';
+
+/**
  * Validates a repository URL (only https://github.com/... or git@github.com:... / ssh://git@github.com/... allowed).
  */
 export function validateGithubUrl(url) {
@@ -183,3 +334,4 @@ export function validateGithubUrl(url) {
   }
   return { valid: false, error: ERROR_BANNER_TEXT };
 }
+

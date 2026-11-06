@@ -12,6 +12,9 @@ import {
   filterProblems,
   filterRegistros,
   computeAcceptButtonState,
+  computeReviewCardState,
+  applyReviewCardAction,
+  getNextProblem,
   validateGithubUrl,
   ERROR_BANNER_TEXT
 } from './bara-logic.js';
@@ -105,6 +108,51 @@ test('strict mode blocks Aceptar on unverified changes with exact message', () =
   assert.equal(verifiedStrict.disabled, false);
 });
 
+test('Rechazado state hides Aceptar and Rechazar and shows only Deshacer rechazo; Deshacer rechazo restores No verificado and logs without deleting lines', () => {
+  const initial = { reviewCardVerified: false, strictMode: false, unverifiedAccepted: false, unverifiedRejected: false };
+  const afterReject = applyReviewCardAction('reject', initial, []);
+  assert.equal(afterReject.registros.length, 1);
+  assert.equal(afterReject.addedLog.level, 'AVISO');
+  assert.equal(afterReject.addedLog.text, 'Cambio rechazado en HELLO.bara');
+
+  const rejectedView = computeReviewCardState(afterReject.state);
+  assert.equal(rejectedView.statusLabel, 'Rechazado');
+  assert.equal(rejectedView.statusChipClass, 'chip chip-muted');
+  assert.equal(rejectedView.showAccept, false);
+  assert.equal(rejectedView.showReject, false);
+  assert.equal(rejectedView.showUndo, false);
+  assert.equal(rejectedView.showUndoReject, true);
+
+  const afterUndoReject = applyReviewCardAction('undo-reject', afterReject.state, afterReject.registros);
+  assert.equal(afterUndoReject.registros.length, 2);
+  assert.equal(afterUndoReject.registros[0].text, 'Cambio rechazado en HELLO.bara');
+  assert.equal(afterUndoReject.addedLog.level, 'INFO');
+  assert.equal(afterUndoReject.addedLog.text, 'Rechazo deshecho en HELLO.bara');
+
+  const restoredView = computeReviewCardState(afterUndoReject.state);
+  assert.equal(restoredView.statusLabel, 'No verificado');
+  assert.equal(restoredView.showAccept, true);
+  assert.equal(restoredView.showReject, true);
+  assert.equal(restoredView.showUndoReject, false);
+});
+
+test('F8 / Alt+Down and Shift+F8 cycle through problems forward and backward', () => {
+  const first = getNextProblem(INITIAL_PROBLEMS, null, 1);
+  assert.equal(first.id, 'prob-1');
+
+  const second = getNextProblem(INITIAL_PROBLEMS, 'prob-1', 1);
+  assert.equal(second.id, 'prob-2');
+
+  const third = getNextProblem(INITIAL_PROBLEMS, 'prob-2', 1);
+  assert.equal(third.id, 'prob-3');
+
+  const wrappedFirst = getNextProblem(INITIAL_PROBLEMS, 'prob-3', 1);
+  assert.equal(wrappedFirst.id, 'prob-1');
+
+  const prevFromFirst = getNextProblem(INITIAL_PROBLEMS, 'prob-1', -1);
+  assert.equal(prevFromFirst.id, 'prob-3');
+});
+
 test('GitHub URL validator returns canonical error banner message', () => {
   const bad = validateGithubUrl('http://gitlab.com/user/repo');
   assert.equal(bad.valid, false);
@@ -116,3 +164,4 @@ test('GitHub URL validator returns canonical error banner message', () => {
   const goodSsh = validateGithubUrl('git@github.com:user/bara-ide.git');
   assert.equal(goodSsh.valid, true);
 });
+
