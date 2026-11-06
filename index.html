@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Bara IDE</title>
+  <meta name="description" content="Mock visual de Bara IDE."/>
+  <meta property="og:title" content="Bara IDE"/>
+  <meta property="og:description" content="Mock visual de Bara IDE."/>
+  <link rel="stylesheet" href="/bara.css"/>
+  <style>
+    #demo-switcher {
+      position: fixed;
+      bottom: 34px;
+      right: 14px;
+      z-index: 9999;
+      font-family: var(--font);
+      display: none;
+    }
+    #demo-switcher.visible {
+      display: block;
+    }
+    #demo-switcher-btn {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    }
+    #demo-switcher-btn:hover {
+      color: var(--green-soft);
+      border-color: var(--green-soft);
+    }
+    #demo-menu {
+      position: absolute;
+      bottom: 34px;
+      right: 0;
+      background: #101419;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 260px;
+      max-height: 440px;
+      overflow-y: auto;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.8);
+      display: none;
+      flex-direction: column;
+    }
+    #demo-menu.open {
+      display: flex;
+    }
+    .demo-option {
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      border-bottom: 1px solid rgba(30, 42, 56, 0.4);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .demo-option:hover {
+      background: var(--hover);
+      color: var(--green-soft);
+    }
+    .demo-option.selected {
+      color: var(--green-soft);
+      font-weight: 600;
+      background: rgba(106, 169, 111, 0.08);
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <div class="shell-body">
+    <!-- Canonical Universal Rail (Fixed ~92px, Exact 22px SVGs, 14px font, Registros not Logs) -->
+    <aside class="rail">
+      <nav>
+        <a class="active" href="#" data-rail="Archivos" data-screen="01" title="Archivos (Ctrl+O)">
+          <svg width="22" height="22" viewBox="0 0 24 24"><path d="M3 7V19C3 20.1 3.9 21 5 21H19C20.1 21 21 20.1 21 19V9C21 7.9 20.1 7 19 7H12L10 4H5C3.9 4 3 4.9 3 6V7Z"/></svg>
+          <span>Archivos</span>
+        </a>
+        <a class="" href="#" data-rail="Buscar" data-screen="02" title="Buscar (Ctrl+Shift+P)">
+          <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21L16.65 16.65"/></svg>
+          <span>Buscar</span>
+        </a>
+        <a class="" href="#" data-rail="Chat" data-screen="03" title="Chat asistente">
+          <svg width="22" height="22" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          <span>Chat</span>
+        </a>
+        <a class="" href="#" data-rail="Registros" data-screen="12" title="Registros de eventos">
+          <svg width="22" height="22" viewBox="0 0 24 24"><path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2Z"/><path d="M14 2V8H20"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+          <span>Registros</span>
+        </a>
+        <a class="" href="#" data-rail="Herramientas" data-screen="07" title="Herramientas del sistema">
+          <svg width="22" height="22" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          <span>Herramientas</span>
+        </a>
+        <a class="" href="#" data-rail="Ajustes" data-screen="13" title="Ajustes de IA">
+          <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Ajustes</span>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Dynamic Screen Content Area -->
+    <div id="screen-viewport" style="flex: 1; min-width: 0; display: flex; overflow: hidden; position: relative;">
+      <!-- Active screen HTML injected here -->
+    </div>
+  </div>
+
+  <!-- Canonical Status Bar (13px font, clickable 2 problemas) -->
+  <footer class="status">
+    <span class="ok">●</span>
+    <span>main</span>
+    <span class="sep">|</span>
+    <span id="status-problemas-trigger" role="button" tabindex="0" style="cursor: pointer;" title="Mostrar/Ocultar panel Problemas (Ctrl+J)">2 problemas</span>
+    <span class="sep">|</span>
+    <span class="mono">kernel fa3d308</span>
+    <span class="sep">|</span>
+    <span>DeepSeek · deepseek-chat</span>
+    <span style="margin-left:auto"></span>
+  </footer>
+</div>
+
+<!-- Discreet Demo Switcher (hidden unless ?demo=1) -->
+<div id="demo-switcher">
+  <button id="demo-switcher-btn" title="Selector de pantalla (15 referencias)">
+    <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green-soft);"></span>
+    <span id="demo-active-label">01 · Bienvenida</span>
+    <span style="font-size:10px;opacity:0.7;">▼</span>
+  </button>
+  <div id="demo-menu"></div>
+</div>
+
+<script src="/bara.js"></script>
+</body>
+</html>

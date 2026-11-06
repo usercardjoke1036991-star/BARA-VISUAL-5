@@ -1,0 +1,15 @@
+{
+  "name": "bara-visual",
+  "version": "0.1.0",
+  "description": "Bara IDE",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "echo 'Build OK'",
+    "lint": "echo 'Lint OK'"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
