@@ -27,7 +27,8 @@ const canonicalRoutes = [
   '/git',
   '/ajustes',
   '/problemas',
-  '/editor'
+  '/editor',
+  '/demo'
 ];
 
 for (const routePath of canonicalRoutes) {
