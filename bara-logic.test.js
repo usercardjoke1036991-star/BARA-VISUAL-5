@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import {
   APP_VERSION,
   OPEN_FILE_PATH,
+  DEFAULT_TRUSTED_FOLDER,
   SHOW_ADVANCED_DEFAULT,
   HIDDEN_ADVANCED_COMPONENTS,
   MORE_TABS_ITEMS,
+  INITIAL_PROBLEMS,
+  computeProblemsSummary,
   BARA_DIAGNOSTICS,
   validateBaraRoot,
   validateBaraNumber,
@@ -15,9 +18,10 @@ import {
   ERROR_BANNER_TEXT
 } from './bara-logic.js';
 
-test('version and open file constants match v0.5.0 spec', () => {
+test('version, trusted folder and hidden advanced constants match v0.5.0 spec', () => {
   assert.equal(APP_VERSION, 'v0.5.0');
   assert.equal(OPEN_FILE_PATH, 'samples/genesis.bara');
+  assert.equal(DEFAULT_TRUSTED_FOLDER, 'C:/Users/Vexor/Downloads/bara-ide');
   assert.equal(SHOW_ADVANCED_DEFAULT, false);
   assert.ok(HIDDEN_ADVANCED_COMPONENTS.belnapBilattice.hiddenByDefault);
   assert.ok(HIDDEN_ADVANCED_COMPONENTS.aetherHeader.hiddenByDefault);
@@ -34,6 +38,23 @@ test('more tabs menu contains the 6 required items in order', () => {
     'Lienzo',
     'Núcleo'
   ]);
+});
+
+test('single source of truth for problems computes coherent counters and updates when dismissing', () => {
+  const initialSummary = computeProblemsSummary(INITIAL_PROBLEMS);
+  assert.equal(initialSummary.total, 3);
+  assert.equal(initialSummary.warnings, 1);
+  assert.equal(initialSummary.errors, 2);
+  assert.equal(initialSummary.statusText, '3 problemas · ⚠ 1 aviso · ✖ 2 errores');
+  assert.equal(initialSummary.badgeText, '⚠ 3');
+
+  const afterDismiss = INITIAL_PROBLEMS.slice(1);
+  const nextSummary = computeProblemsSummary(afterDismiss);
+  assert.equal(nextSummary.total, 2);
+  assert.equal(nextSummary.warnings, 0);
+  assert.equal(nextSummary.errors, 2);
+  assert.equal(nextSummary.statusText, '2 problemas · ⚠ 0 avisos · ✖ 2 errores');
+  assert.equal(nextSummary.badgeText, '⚠ 2');
 });
 
 test('TokenKind::Diagnostic validates 3-consonant roots', () => {
@@ -77,13 +98,13 @@ test('BARA_DIAGNOSTICS has the 3 canonical diagnostics in samples/genesis.bara',
   assert.equal(BARA_DIAGNOSTICS[2].message, 'Cadena sin cerrar');
 });
 
-test('strict mode blocks Aceptar on unverified changes only', () => {
+test('strict mode blocks Aceptar on unverified changes with exact message', () => {
   const unverifiedNormal = computeAcceptButtonState({ patchVerified: false, strictMode: false });
   assert.equal(unverifiedNormal.disabled, false);
 
   const unverifiedStrict = computeAcceptButtonState({ patchVerified: false, strictMode: true });
   assert.equal(unverifiedStrict.disabled, true);
-  assert.ok(unverifiedStrict.explanation.includes('Bloquea Aceptar en cambios no verificados'));
+  assert.equal(unverifiedStrict.explanation, 'Modo estricto: verifica antes de aceptar');
 
   const verifiedStrict = computeAcceptButtonState({ patchVerified: true, strictMode: true });
   assert.equal(verifiedStrict.disabled, false);

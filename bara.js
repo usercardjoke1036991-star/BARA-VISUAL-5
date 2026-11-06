@@ -1,16 +1,17 @@
 /**
- * Bara IDE — AETHER-Ω (v0.5.0)
- * BARA-VISUAL-5 interactive mock (built on BARA-VISUAL-4).
+ * Bara IDE
+ * Self-contained desktop-class IDE mock for screens 01 to 15 (BARA-VISUAL-4 + BARA-VISUAL-5 additions).
  */
 
 import {
   APP_VERSION,
-  OPEN_FILE_PATH,
   DEFAULT_TRUSTED_FOLDER,
-  ERROR_BANNER_TEXT,
   SHOW_ADVANCED_DEFAULT,
+  HIDDEN_ADVANCED_COMPONENTS,
+  ERROR_BANNER_TEXT,
   MORE_TABS_ITEMS,
-  BARA_DIAGNOSTICS,
+  INITIAL_PROBLEMS,
+  computeProblemsSummary,
   computeAcceptButtonState,
   validateGithubUrl
 } from './bara-logic.js';
@@ -34,426 +35,163 @@ const SVG = {
   maximize: (size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`
 };
 
-// Application State (BARA-VISUAL-5)
-const state = {
-  showAdvanced: SHOW_ADVANCED_DEFAULT,
-  editorFirst: false,
-  strictMode: false,
-  autoSave: true,
-  trustedFolder: DEFAULT_TRUSTED_FOLDER,
-  aiProvider: 'DeepSeek', // 'DeepSeek' | 'Modelo local (GGUF)'
-  patchVerified: false,   // false = Aviso rojo NO verificado, true = Verificado verde
-  patchStatus: 'pending', // 'pending' | 'accepted' | 'rejected'
-  errorBannerVisible: false,
-  activeDiagnosticLine: 2,
-  bottomDockTab: 'problemas',
-  moreTabsOpen: false
-};
+// BARA-VISUAL-5 Additive State
+let showAdvanced = SHOW_ADVANCED_DEFAULT;
+let editorFirst = false;
+let strictMode = false;
+let autosave = true;
+let rememberKey = false; // DESMARCADO por defecto
+let trustedFolder = DEFAULT_TRUSTED_FOLDER;
+let aiProvider = 'DeepSeek';
+let errorBannerVisible = false;
+let activeDiagLine = null;
+let moreTabsOpen = false;
+let unverifiedAccepted = false;
+let unverifiedAcceptedTimestamp = '2026-11-06_1033';
+let reviewCardVerified = false;
+let gitRemoteUrl = 'https://gitlab.com/vexor/genesis_engine.git';
 
-try {
-  const savedEditorFirst = localStorage.getItem('editorFirst');
-  if (savedEditorFirst !== null) {
-    state.editorFirst = savedEditorFirst === 'true';
+// Un solo origen de datos para los problemas (barra de estado, contador ⚠ N y panel Problemas)
+let activeProblems = INITIAL_PROBLEMS.map(p => ({ ...p }));
+
+// Registros dinámicos: conserva todos los de VISUAL-4 y añade la nueva línea tras aceptar el cambio
+const BASE_REGISTROS = [
+  { time: '10:31:02', level: 'INFO', color: 'var(--green-soft)', text: 'Carpeta abierta: genesis_engine' },
+  { time: '10:31:04', level: 'INFO', color: 'var(--green-soft)', text: 'Kernel conectado · fa3d308' },
+  { time: '10:31:18', level: 'INFO', color: 'var(--green-soft)', text: 'Cambio aceptado en HELLO.bara · respaldo 2026-11-05_1031' },
+  { time: '10:31:40', level: 'AVISO', color: '#c9a227', text: 'Parche no verificado rechazado' },
+  { time: '10:32:05', level: 'ERROR', color: '#c45c5c', text: 'Sin conexión con el proveedor (tiempo agotado)' },
+  { time: '10:32:11', level: 'INFO', color: 'var(--green-soft)', text: 'Reintento de conexión · DeepSeek' },
+  { time: '10:32:14', level: 'INFO', color: 'var(--green-soft)', text: 'Conexión OK · deepseek-chat' },
+  { time: '10:32:30', level: 'AVISO', color: '#c9a227', text: 'Archivo .env detectado · excluido del commit' }
+];
+
+function getActiveRegistros() {
+  const list = [...BASE_REGISTROS];
+  if (unverifiedAccepted) {
+    list.push({
+      time: '10:33:00',
+      level: 'INFO',
+      color: 'var(--green-soft)',
+      text: `Cambio aceptado en HELLO.bara · respaldo ${unverifiedAcceptedTimestamp}`
+    });
   }
-  const savedStrict = localStorage.getItem('strictMode');
-  if (savedStrict !== null) {
-    state.strictMode = savedStrict === 'true';
-  }
-} catch (_) {
-  // Ignore storage restrictions
+  return list;
 }
 
-const SIDEBAR_HTML = `<aside class="sidebar" aria-label="Explorador de proyectos">
-  <div style="padding:10px 12px;border-bottom:1px solid var(--border2)">
-    <div style="font-size:14px;font-weight:600;margin-bottom:6px">Proyectos</div>
+try {
+  if (localStorage.getItem('editorFirst') !== null) {
+    editorFirst = localStorage.getItem('editorFirst') === 'true';
+  }
+  if (localStorage.getItem('strictMode') !== null) {
+    strictMode = localStorage.getItem('strictMode') === 'true';
+  }
+  if (localStorage.getItem('autosave') !== null) {
+    autosave = localStorage.getItem('autosave') === 'true';
+  }
+} catch (_) {}
+
+const SIDEBAR_HTML = `<aside class="sidebar">
+  <div style="padding:12px;border-bottom:1px solid var(--border2)">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">Proyectos</div>
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;color:var(--text)">
-      <span style="opacity:.7">▾</span>
+      <span style="opacity:.6">▾</span>
       ${SVG.folder(16)}
       <span>genesis_engine</span>
     </div>
-    <div style="padding-left:14px;display:flex;flex-direction:column;gap:2px">
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:var(--hover);color:#fff">
+    <div style="padding-left:18px;display:flex;flex-direction:column;gap:2px">
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:var(--hover);color:#fff">
         <span style="color:var(--green-soft);display:inline-flex">${SVG.chat(16)}</span><span>saludo_kernel</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;color:var(--muted)">
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;color:var(--muted)">
         <span style="display:inline-flex">${SVG.chat(16)}</span><span>Antinomia guard_01</span>
       </div>
     </div>
-    <button type="button" class="btn btn-primary" style="width:100%;margin-top:8px;justify-content:center;padding:5px 10px">Nuevo chat</button>
+    <button class="btn btn-primary" style="width:100%;margin-top:10px;justify-content:center">Nuevo chat</button>
   </div>
-  <div style="flex:1;overflow:hidden;padding:10px 12px">
-    <div style="font-size:14px;font-weight:600;margin-bottom:6px">Explorador</div>
+  <div style="flex:1;overflow:hidden;padding:12px">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">Explorador</div>
     <div class="mono" style="font-size:14px;color:var(--muted)">
       <div style="display:flex;align-items:center;gap:6px;color:var(--text);margin-bottom:4px">
-        <span>▾</span>${SVG.folder(16)}<span>samples</span>
+        <span>▾</span>${SVG.folder(16)}<span>genesis_engine</span>
       </div>
-      <div style="padding-left:14px;display:flex;flex-direction:column;gap:2px">
-        <div style="padding:4px 8px;border-radius:5px;background:var(--hover);color:var(--green-soft)">genesis.bara</div>
-        <div style="padding:4px 8px;border-radius:5px">HELLO.bara</div>
+      <div style="padding-left:16px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px"><span>▸</span>${SVG.folder(16)}<span>src</span></div>
+        <div style="padding-left:14px;display:flex;flex-direction:column;gap:2px">
+          <div style="padding:4px 8px;border-radius:5px;background:var(--hover);color:var(--green-soft)">HELLO.bara</div>
+          <div style="padding:4px 8px;border-radius:5px">genesis.bara</div>
+        </div>
       </div>
     </div>
   </div>
 </aside>`;
 
-const COMPOSER_HTML = `<div style="padding:8px 12px;border-top:1px solid var(--border);background:var(--rail);flex-shrink:0">
-  <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
-    <div style="color:var(--muted);margin-bottom:6px;font-size:14px">Escribe un mensaje o instrucción para Bara…</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+// Auto-Apply desmarcado por defecto
+const COMPOSER_HTML = `<div style="padding:10px 12px;border-top:1px solid var(--border);background:var(--rail);flex-shrink:0">
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px">
+    <div style="color:var(--muted);margin-bottom:8px">Escribe...</div>
+    <div style="display:flex;align-items:center;justify-content:space-between">
       <div class="row">
         ${SVG.clip(16)}
-        <label class="row" style="color:var(--muted);font-size:14px">
-          <span class="check on">✓</span> Auto-Apply
+        <label class="row" style="color:var(--muted);font-size:14px;cursor:pointer">
+          <span class="check" id="auto-apply-checkbox"></span> Auto-Apply
         </label>
       </div>
       <div class="row">
-        <button type="button" class="btn btn-primary" style="padding:4px 10px">Enviar</button>
-        <button type="button" class="btn btn-ghost" style="padding:4px 10px">Detener</button>
+        <button class="btn btn-primary">Enviar</button>
+        <button class="btn btn-ghost">Detener</button>
       </div>
     </div>
   </div>
 </div>`;
 
 function buildTabbar(unsavedDot = true) {
-  return `<div class="tabbar" role="tablist" aria-label="Archivos abiertos">
-    <div class="tab active" role="tab" aria-selected="true">
-      <span>${OPEN_FILE_PATH}</span>
-      ${unsavedDot ? '<span class="dot" title="Sin guardar"></span>' : ''}
-      <button type="button" class="x" aria-label="Cerrar pestaña ${OPEN_FILE_PATH}">${SVG.close(14)}</button>
-    </div>
-    <div class="tab" role="tab" aria-selected="false">
+  return `<div class="tabbar">
+    <div class="tab active">
       <span>HELLO.bara</span>
+      ${unsavedDot ? '<span class="dot" title="Sin guardar"></span>' : ''}
       <button type="button" class="x" aria-label="Cerrar pestaña HELLO.bara">${SVG.close(14)}</button>
+    </div>
+    <div class="tab">
+      <span>genesis.bara</span>
+      <button type="button" class="x" aria-label="Cerrar pestaña genesis.bara">${SVG.close(14)}</button>
     </div>
     <div class="tabbar-save-hint">Guardar (Ctrl+S)</div>
   </div>`;
 }
 
-/**
- * Renders the Chat Patch Review Card (Point 4 & Point 7):
- * - Includes toggle for Verificado (verde) / No verificado (rojo)
- * - Uses role="status" (NEVER role="alert")
- * - Respects strictMode ("Bloquea Aceptar en cambios no verificados")
- * - Shows Deshacer after accepting
- */
-function buildPatchReviewCardHtml() {
-  const acceptState = computeAcceptButtonState({
-    patchVerified: state.patchVerified,
-    strictMode: state.strictMode
-  });
+// 5. NO CAMBIAR: El código del editor de VISUAL-4 (funcion / variables / si) se queda igual (6 líneas), con subrayado ondulado + tooltip
+function buildEditorWithDiagnosticsHtml() {
+  const hasLine2Prob = activeProblems.some(p => p.file === 'HELLO.bara' && p.line === 2);
+  const hasLine4Prob = activeProblems.some(p => p.file === 'HELLO.bara' && p.line === 4);
 
-  const toggleBtnHtml = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-      <strong style="font-size:14px;color:#fff">Revisión de cambio · <span class="mono">${OPEN_FILE_PATH}</span></strong>
-      <button type="button" id="btn-toggle-verified-demo" class="btn btn-ghost" style="padding:3px 8px;font-size:14px" aria-label="Alternar estado verificado o no verificado">
-        Estado: ${state.patchVerified ? '<span style="color:var(--green-soft)">Verificado ✓</span>' : '<span style="color:#f5bcbc">No verificado</span>'}
-      </button>
-    </div>
-  `;
+  const gutterRows = [
+    '<div>1</div>',
+    hasLine2Prob ? '<div class="gutter-err" title="Variable x sin anotación de tipo">●</div>' : '<div>2</div>',
+    activeDiagLine === 2 ? '<div>·</div>' : '',
+    '<div>3</div>',
+    hasLine4Prob ? '<div class="gutter-err" title="Identificador \'mostrar\' — aviso de firma">●</div>' : '<div>4</div>',
+    activeDiagLine === 4 ? '<div>·</div>' : '',
+    '<div>5</div>',
+    '<div>6</div>'
+  ].join('');
 
-  const diffPreviewHtml = `
-    <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;line-height:1.45">
-      <div class="diff-del">- mostrar("hola")</div>
-      <div class="diff-add">+ mostrar("kernel activo")</div>
-      <div class="diff-add">+ mostrar_todo("genesis")</div>
-    </div>
-  `;
+  const diagTooltip = (lineNum, text) => activeDiagLine === lineNum
+    ? `<div><span class="diag-tooltip-row" role="status">⚠ ${text}</span></div>`
+    : '';
 
-  if (state.patchStatus === 'accepted') {
-    return `<div class="patch-review-card" id="chat-patch-card">
-      ${toggleBtnHtml}
-      <div class="patch-notice-green" role="status">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-          <span>✓ Cambio aplicado en <span class="mono">${OPEN_FILE_PATH}</span></span>
-          <button type="button" id="btn-patch-undo" class="btn btn-ghost" style="padding:4px 10px">Deshacer</button>
-        </div>
-      </div>
-    </div>`;
-  }
+  const bodyRows = [
+    `<div class="${activeDiagLine === 1 ? 'code-line-active' : ''}" data-line="1">funcion main() {</div>`,
+    `<div class="${activeDiagLine === 2 ? 'code-line-active' : ''}" data-line="2">  <span class="${hasLine2Prob ? 'diag-token diag-error' : ''}" tabindex="0" role="button" data-diag-line="2" title="Variable x sin anotación de tipo">variables x = 10</span></div>`,
+    diagTooltip(2, 'Variable x sin anotación de tipo (HELLO.bara:2:3)'),
+    `<div class="${activeDiagLine === 3 ? 'code-line-active' : ''}" data-line="3">  si x &gt; 5 {</div>`,
+    `<div class="${activeDiagLine === 4 ? 'code-line-active' : ''}" data-line="4">    <span class="${hasLine4Prob ? 'err-line diag-token' : ''}" tabindex="0" role="button" data-diag-line="4" title="Identificador 'mostrar' — aviso de firma">mostrar("Bara IDE")</span></div>`,
+    diagTooltip(4, "Identificador 'mostrar' — aviso de firma (HELLO.bara:4:5)"),
+    `<div class="${activeDiagLine === 5 ? 'code-line-active' : ''}" data-line="5">  }</div>`,
+    `<div class="${activeDiagLine === 6 ? 'code-line-active' : ''}" data-line="6">}</div>`
+  ].join('');
 
-  if (state.patchStatus === 'rejected') {
-    return `<div class="patch-review-card" id="chat-patch-card">
-      ${toggleBtnHtml}
-      <div role="status" style="padding:6px 8px;border-radius:6px;background:#161b22;color:var(--muted);display:flex;align-items:center;justify-content:space-between">
-        <span>Cambio descartado.</span>
-        <button type="button" id="btn-patch-restore" class="btn btn-ghost" style="padding:3px 8px">Reabrir revisión</button>
-      </div>
-    </div>`;
-  }
-
-  if (!state.patchVerified) {
-    return `<div class="patch-review-card" id="chat-patch-card">
-      ${toggleBtnHtml}
-      ${diffPreviewHtml}
-      <div id="unverified-patch-notice" class="patch-notice-red" role="status">
-        <div style="display:flex;align-items:center;gap:8px;font-weight:600">
-          ${SVG.warn(18)}
-          <span>Este cambio NO está verificado</span>
-        </div>
-        ${acceptState.disabled ? `<div id="strict-mode-explanation" style="font-size:14px;color:#ffd0d0;background:rgba(0,0,0,0.28);padding:4px 8px;border-radius:5px">Modo estricto activo: Bloquea Aceptar en cambios no verificados.</div>` : ''}
-        <div style="display:flex;align-items:center;gap:8px;margin-top:2px;flex-wrap:wrap">
-          <button type="button" id="btn-patch-accept" class="btn btn-danger" style="padding:4px 10px" ${acceptState.disabled ? 'disabled aria-disabled="true" title="Bloquea Aceptar en cambios no verificados"' : ''}>Aceptar</button>
-          <button type="button" id="btn-patch-reject" class="btn btn-ghost" style="padding:4px 10px">Rechazar</button>
-        </div>
-      </div>
-    </div>`;
-  }
-
-  return `<div class="patch-review-card" id="chat-patch-card">
-    ${toggleBtnHtml}
-    ${diffPreviewHtml}
-    <div id="verified-patch-notice" class="patch-notice-green" role="status">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <span style="font-weight:600">✓ Verificado por el kernel</span>
-        <div class="row" style="gap:6px">
-          <button type="button" id="btn-patch-accept" class="btn btn-primary" style="padding:4px 10px">Aceptar</button>
-          <button type="button" id="btn-patch-reject" class="btn btn-ghost" style="padding:4px 10px">Rechazar</button>
-        </div>
-      </div>
-    </div>
-  </div>`;
-}
-
-/**
- * Renders the Editor code for samples/genesis.bara with TokenKind::Diagnostic wavy underlines & tooltips (Point 6):
- * a) @ktbl -> "Raíz inválida: debe tener exactamente 3 consonantes"
- * b) 1.2.3 -> "Número inválido"
- * c) "Bienvenido a Bara IDE -> "Cadena sin cerrar", cutting at newline so lines 6–11 color normally!
- */
-function buildDiagnosticsEditorHtml() {
-  const activeLine = state.activeDiagnosticLine;
-  const lines = [
-    { num: 1, gutter: '1', html: `<span class="comment">// samples/genesis.bara — módulo principal ${APP_VERSION}</span>` },
-    {
-      num: 2,
-      gutter: '<span class="gutter-err" title="Error en línea 2">●</span>',
-      html: `<span class="kw">raiz</span> <span class="diag-token diag-error" tabindex="0" role="button" data-diag-line="2" title="Raíz inválida: debe tener exactamente 3 consonantes">@ktbl</span> ContratoGenesis {`,
-      tooltip: activeLine === 2 ? `<div><span class="diag-inline-tooltip" role="status">⚠ Raíz inválida: debe tener exactamente 3 consonantes</span></div>` : ''
-    },
-    { num: 3, gutter: '3', html: `  <span class="kw">funcion</span> iniciar() {` },
-    {
-      num: 4,
-      gutter: '<span class="gutter-err" title="Error en línea 4">●</span>',
-      html: `    variables version_num = <span class="diag-token diag-error" tabindex="0" role="button" data-diag-line="4" title="Número inválido">1.2.3</span>`,
-      tooltip: activeLine === 4 ? `<div><span class="diag-inline-tooltip" role="status">⚠ Número inválido</span></div>` : ''
-    },
-    {
-      num: 5,
-      gutter: '<span class="gutter-warn" title="Aviso en línea 5">▲</span>',
-      html: `    variables saludo = <span class="diag-token diag-warn" tabindex="0" role="button" data-diag-line="5" title="Cadena sin cerrar">"Bienvenido a Bara IDE</span>`,
-      tooltip: activeLine === 5 ? `<div><span class="diag-inline-tooltip warn" role="status">⚠ Cadena sin cerrar</span></div>` : ''
-    },
-    { num: 6, gutter: '6', html: `    <span class="kw">si</span> version_num &gt; 1 {` },
-    { num: 7, gutter: '7', html: `      mostrar(<span class="str">"kernel activo"</span>)` },
-    { num: 8, gutter: '8', html: `      registrar(<span class="str">"genesis listo"</span>)` },
-    { num: 9, gutter: '9', html: `    }` },
-    { num: 10, gutter: '10', html: `  }` },
-    { num: 11, gutter: '11', html: `}` }
-  ];
-
-  const gutterHtml = lines.map(l => `<div>${l.gutter}</div>${l.tooltip ? '<div>·</div>' : ''}`).join('');
-  const bodyHtml = lines.map(l => `<div class="code-line ${activeLine === l.num ? 'highlight-line' : ''}" data-line-num="${l.num}">${l.html}</div>${l.tooltip || ''}`).join('');
-
-  return `<div class="code" id="editor-code-scroll">
-    <div class="gutter">${gutterHtml}</div>
-    <div class="code-body">${bodyHtml}</div>
-  </div>`;
-}
-
-function buildProblemsTableHtml() {
-  return `
-    <div style="display:grid;grid-template-columns:32px 110px 1fr;gap:8px;padding:5px 12px;color:var(--muted);font-size:14px;border-bottom:1px solid var(--border2)">
-      <span>Tipo</span><span>Línea:Col</span><span>Mensaje (TokenKind::Diagnostic)</span>
-    </div>
-    ${BARA_DIAGNOSTICS.map(d => `
-      <div class="problem-row" role="button" tabindex="0" data-file="${d.file}" data-line="${d.line}" data-col="${d.column}" style="display:grid;grid-template-columns:32px 110px 1fr;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border2);font-size:14px;cursor:pointer;align-items:center;${state.activeDiagnosticLine === d.line ? 'background:var(--hover);' : ''}">
-        <span style="color:${d.severity === 'error' ? 'var(--danger)' : 'var(--warn)'};font-weight:700" aria-hidden="true">⚠</span>
-        <span class="mono" style="color:var(--green-soft)">${d.line}:${d.column}</span>
-        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.message} <span class="mono" style="color:var(--muted)">(${d.token})</span></span>
-      </div>
-    `).join('')}
-  `;
-}
-
-function buildBottomDockContentHtml() {
-  const tab = state.bottomDockTab;
-  if (tab === 'problemas') {
-    return buildProblemsTableHtml();
-  }
-  if (tab === 'registros') {
-    return `
-      <div style="padding:10px 14px;font-family:var(--mono);font-size:14px;line-height:1.6;color:var(--text);">
-        <div><span style="color:var(--muted)">10:31:02</span> <span style="color:var(--green-soft);font-weight:600">[INFO]</span> Archivo cargado: ${OPEN_FILE_PATH}</div>
-        <div><span style="color:var(--muted)">10:31:04</span> <span style="color:var(--green-soft);font-weight:600">[INFO]</span> Kernel activo · ${APP_VERSION}</div>
-        <div><span style="color:var(--muted)">10:31:40</span> <span style="color:var(--warn);font-weight:600">[DIAG]</span> 3 diagnósticos detectados por el lexer</div>
-      </div>
-    `;
-  }
-  if (tab === 'terminal') {
-    return `
-      <div style="padding:10px 14px;font-family:var(--mono);font-size:14px;line-height:1.6;color:var(--text);">
-        <span style="color:var(--green-soft)">bara-kernel$</span> bara check ${OPEN_FILE_PATH}<br/>
-        Bara IDE ${APP_VERSION} · TokenKind::Diagnostic: 3 avisos/errores<br/>
-        <span style="color:var(--green-soft)">bara-kernel$</span> _
-      </div>
-    `;
-  }
-  const extraItem = MORE_TABS_ITEMS.find(i => i.id === tab);
-  if (extraItem) {
-    return `
-      <div style="padding:12px 14px;font-size:14px;color:var(--text);display:flex;flex-direction:column;gap:6px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="chip">${extraItem.label}</span>
-          <span style="color:var(--muted)">Vista acoplada del panel inferior (${APP_VERSION})</span>
-        </div>
-        <div>${extraItem.description}</div>
-      </div>
-    `;
-  }
-  return buildProblemsTableHtml();
-}
-
-function buildBottomDockHtml() {
-  const activeTab = state.bottomDockTab;
-  const extraSelected = MORE_TABS_ITEMS.find(i => i.id === activeTab);
-  return `<div id="bottom-dock" style="height:175px;border-top:1px solid var(--border);background:#0a0c0d;display:flex;flex-direction:column;flex-shrink:0">
-    <div style="height:34px;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--border);gap:4px;min-width:0">
-      <button type="button" id="bp-tab-problemas" class="bp-tab" style="padding:4px 8px;border:none;background:${activeTab === 'problemas' ? 'var(--hover)' : 'transparent'};border-radius:4px;color:${activeTab === 'problemas' ? '#fff' : 'var(--muted)'};font-weight:${activeTab === 'problemas' ? '600' : 'normal'};cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Problemas (3)</button>
-      <button type="button" id="bp-tab-registros" class="bp-tab" style="padding:4px 8px;border:none;background:${activeTab === 'registros' ? 'var(--hover)' : 'transparent'};border-radius:4px;color:${activeTab === 'registros' ? '#fff' : 'var(--muted)'};font-weight:${activeTab === 'registros' ? '600' : 'normal'};cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Registros</button>
-      <button type="button" id="bp-tab-terminal" class="bp-tab" style="padding:4px 8px;border:none;background:${activeTab === 'terminal' ? 'var(--hover)' : 'transparent'};border-radius:4px;color:${activeTab === 'terminal' ? '#fff' : 'var(--muted)'};font-weight:${activeTab === 'terminal' ? '600' : 'normal'};cursor:pointer;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto">Terminal kernel</button>
-      ${extraSelected ? `<span class="chip" style="font-size:14px;padding:1px 8px">${extraSelected.label}</span>` : ''}
-      <button type="button" id="bp-more-tabs-btn" class="dock-ctrl-btn" aria-label="Más pestañas" aria-haspopup="menu" aria-expanded="${state.moreTabsOpen ? 'true' : 'false'}" title="Más pestañas (»)" style="padding:0 8px;width:auto;font-weight:700;color:var(--green-soft);border:1px solid var(--border)">»</button>
-      <div style="margin-left:auto;display:flex;gap:2px;align-items:center;flex-shrink:0">
-        <button type="button" id="bp-btn-minimize" class="dock-ctrl-btn" aria-label="Minimizar panel inferior" title="Minimizar panel (Ctrl+J)">▬</button>
-        <button type="button" id="bp-btn-maximize" class="dock-ctrl-btn" aria-label="Maximizar panel inferior" title="Maximizar panel">□</button>
-        <button type="button" id="bp-btn-close" class="dock-ctrl-btn" aria-label="Cerrar panel inferior" title="Cerrar panel (Ctrl+J)">×</button>
-      </div>
-    </div>
-    <div id="bp-content" style="flex:1;overflow:auto">
-      ${buildBottomDockContentHtml()}
-    </div>
-  </div>`;
-}
-
-function buildMainWorkspaceScreenHtml(includeBottomDock = true) {
-  return `${SIDEBAR_HTML}
-  <div class="workspace-split ${state.editorFirst ? 'editor-first' : ''}" id="workspace-split-container">
-    <section class="chat-pane" aria-label="Panel de Chat">
-      <div style="height:38px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--border);background:var(--rail);flex-shrink:0">
-        <strong style="font-size:15px">Chat asistente</strong>
-        <div class="row" style="gap:6px">
-          <button type="button" class="btn btn-ghost" style="padding:3px 9px" id="chat-btn-open-ajustes">Ajustes</button>
-        </div>
-      </div>
-      <div style="flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px">
-        <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
-          <div style="color:var(--green-soft)">✓ Archivo activo: <span class="mono">${OPEN_FILE_PATH}</span></div>
-          <div style="color:var(--warn)">⚠ 3 diagnósticos léxicos (TokenKind::Diagnostic)</div>
-        </div>
-        ${buildPatchReviewCardHtml()}
-      </div>
-      ${COMPOSER_HTML}
-    </section>
-    <aside class="editor-pane" aria-label="Editor de código">
-      ${buildTabbar(true)}
-      ${buildDiagnosticsEditorHtml()}
-      ${includeBottomDock ? buildBottomDockHtml() : ''}
-    </aside>
-  </div>`;
-}
-
-function buildSettingsScreenHtml() {
-  const localSelected = state.aiProvider === 'Modelo local (GGUF)';
-  return `<main class="main" style="padding:16px 24px;background:#08090a;overflow:auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;max-width:980px">
-      <div style="display:flex;align-items:center;gap:10px">
-        <h1 style="margin:0;font-size:20px;color:#fff">Ajustes</h1>
-        <span class="chip mono">${APP_VERSION}</span>
-        <span class="chip">Tipografía mínima 14 px en el texto legible · contraste AA · Esc cierra paneles</span>
-      </div>
-      <button type="button" id="btn-close-ajustes" class="btn btn-ghost" aria-label="Cerrar Ajustes (Esc)">Cerrar (Esc)</button>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:980px">
-      <!-- Columna 1: Editor, Carpeta de confianza y Modo estricto -->
-      <div class="card" style="display:flex;flex-direction:column;gap:12px">
-        <div style="font-weight:600;color:#fff;font-size:15px">Preferencias del entorno</div>
-
-        <div style="padding:8px 10px;background:#0d1218;border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--text)">
-          Tipografía mínima 14 px en el texto legible · contraste AA · Esc cierra paneles
-        </div>
-
-        <div class="row" style="justify-content:space-between">
-          <div>
-            <div style="font-weight:500;color:#fff">Autoguardado</div>
-            <div style="color:var(--muted);font-size:14px">Guarda cambios automáticamente en el área local</div>
-          </div>
-          <button type="button" id="toggle-autosave" role="switch" aria-checked="${state.autoSave ? 'true' : 'false'}" aria-label="Autoguardado" class="toggle ${state.autoSave ? 'on' : ''}"></button>
-        </div>
-
-        <div style="border-top:1px solid var(--border2);padding-top:10px">
-          <div class="row" style="justify-content:space-between">
-            <div>
-              <div style="font-weight:600;color:#fff">Modo estricto</div>
-              <div style="color:var(--muted);font-size:14px">Bloquea Aceptar en cambios no verificados</div>
-            </div>
-            <button type="button" id="toggle-strict-mode" role="switch" aria-checked="${state.strictMode ? 'true' : 'false'}" aria-label="Modo estricto: Bloquea Aceptar en cambios no verificados" class="toggle ${state.strictMode ? 'on' : ''}"></button>
-          </div>
-          ${state.strictMode ? `<div role="status" style="margin-top:8px;padding:6px 10px;border-radius:6px;background:#2d1416;border:1px solid #8a3a3a;color:#f7c6c6;font-size:14px">Activo: El botón Aceptar del aviso rojo queda deshabilitado en cambios no verificados.</div>` : ''}
-        </div>
-
-        <div style="border-top:1px solid var(--border2);padding-top:10px">
-          <label class="label" for="input-trusted-folder">Carpeta de confianza</label>
-          <input id="input-trusted-folder" class="field mono" readonly value="${state.trustedFolder}" />
-        </div>
-      </div>
-
-      <!-- Columna 2: Proveedor de IA (sin claves) y Versión -->
-      <div style="display:flex;flex-direction:column;gap:14px">
-        <div class="card" style="display:flex;flex-direction:column;gap:12px">
-          <div style="font-weight:600;color:#fff;font-size:15px">Proveedor de IA (simulado)</div>
-
-          <div>
-            <label class="label" for="settings-provider-select">Proveedor</label>
-            <select id="settings-provider-select" class="field" aria-label="Proveedor de IA">
-              <option value="DeepSeek" ${!localSelected ? 'selected' : ''}>DeepSeek</option>
-              <option value="Modelo local (GGUF)" ${localSelected ? 'selected' : ''}>Modelo local (GGUF)</option>
-            </select>
-          </div>
-
-          ${localSelected ? `
-            <div id="gguf-weights-status" role="status" class="chip-warn chip" style="align-self:flex-start;padding:6px 10px;border-radius:8px">
-              ⚠ No hay pesos locales cargados
-            </div>
-          ` : `
-            <div role="status" class="chip" style="align-self:flex-start;padding:6px 10px;border-radius:8px">
-              ✓ Proveedor simulado listo (DeepSeek)
-            </div>
-          `}
-
-          <div style="padding:10px 12px;background:#0d1218;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:14px">
-            La clave se configura de forma segura fuera de esta maqueta
-          </div>
-        </div>
-
-        <div class="card" style="display:flex;flex-direction:column;gap:8px">
-          <div style="font-weight:600;color:#fff;font-size:15px">Información de versión</div>
-          <div class="row" style="justify-content:space-between">
-            <span>Versión del IDE</span>
-            <span class="mono" style="color:var(--green-soft);font-weight:600">${APP_VERSION}</span>
-          </div>
-          <div class="row" style="justify-content:space-between">
-            <span>Archivo activo</span>
-            <span class="mono">${OPEN_FILE_PATH}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:14px;gap:10px">
-      <button type="button" id="btn-save-settings" class="btn btn-primary">${SVG.save(16)} Guardar preferencias</button>
-      <button type="button" id="btn-go-unverified-from-settings" class="btn btn-ghost">Ver aviso rojo en el Chat</button>
-    </div>
-  </main>`;
+  return `<div class="code"><div class="gutter">${gutterRows}</div><div class="code-body">${bodyRows}</div></div>`;
 }
 
 const BLUEPRINT_JSON_LINES = [
@@ -509,23 +247,26 @@ const DEFAULT_BP = renderBlueprintLines(BLUEPRINT_JSON_LINES);
 const TOPOLOGY_SETS = {
   proyecto: {
     nodes: [
-      { name: 'genesis.bara', kind: 'archivo', path: 'samples/genesis.bara', line: '1', lang: 'Bara', active: true },
-      { name: 'iniciar', kind: 'función', path: 'samples/genesis.bara', line: '3', lang: 'Bara', active: false },
-      { name: 'ContratoGenesis', kind: 'contrato', path: 'samples/genesis.bara', line: '2', lang: 'Bara', active: false },
-      { name: 'HELLO.bara', kind: 'archivo', path: 'src/HELLO.bara', line: '1', lang: 'Bara', active: false }
+      { name: 'HELLO.bara', kind: 'archivo', path: 'src/HELLO.bara', line: '1', lang: 'Bara', active: true },
+      { name: 'main', kind: 'función', path: 'src/HELLO.bara', line: '1', lang: 'Bara', active: false },
+      { name: 'ContratoA', kind: 'contrato', path: 'src/genesis.bara', line: '12', lang: 'Bara', active: false },
+      { name: 'TipoRuta', kind: 'tipo', path: 'src/genesis.bara', line: '4', lang: 'Bara', active: false }
     ],
-    svg: `<svg width="420" height="340" viewBox="0 0 420 340" style="max-width:100%;height:auto">
-      <line x1="180" y1="155" x2="120" y2="105" stroke="#3f6d4b" stroke-width="1.5"/>
-      <line x1="240" y1="155" x2="300" y2="105" stroke="#3f6d4b" stroke-width="1.5"/>
-      <line x1="185" y1="205" x2="130" y2="255" stroke="#3f6d4b" stroke-width="1.5"/>
-      <circle cx="210" cy="175" r="38" fill="#183120" stroke="#3f6d4b" stroke-width="2"/>
-      <text x="210" y="180" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">genesis</text>
-      <circle cx="100" cy="85" r="30" fill="#111821" stroke="#3f6d4b" stroke-width="1.5"/>
-      <text x="100" y="90" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">iniciar</text>
-      <circle cx="320" cy="85" r="36" fill="#111821" stroke="#528960" stroke-width="1.5"/>
-      <text x="320" y="90" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">Contrato</text>
-      <circle cx="110" cy="270" r="34" fill="#111821" stroke="#1e2a38" stroke-width="1.5"/>
-      <text x="110" y="275" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">HELLO</text>
+    svg: `<svg width="420" height="360" viewBox="0 0 420 360" style="max-width:100%;height:auto">
+      <line x1="180" y1="155" x2="120" y2="110" stroke="#3f6d4b" stroke-width="1.5"/>
+      <line x1="240" y1="155" x2="300" y2="110" stroke="#3f6d4b" stroke-width="1.5"/>
+      <line x1="185" y1="210" x2="130" y2="260" stroke="#3f6d4b" stroke-width="1.5"/>
+      <line x1="240" y1="210" x2="290" y2="250" stroke="#3f6d4b" stroke-width="1.5"/>
+      <circle cx="210" cy="180" r="38" fill="#183120" stroke="#3f6d4b" stroke-width="2"/>
+      <text x="210" y="185" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">HELLO</text>
+      <circle cx="100" cy="90" r="30" fill="#111821" stroke="#3f6d4b" stroke-width="1.5"/>
+      <text x="100" y="95" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">main</text>
+      <circle cx="320" cy="90" r="36" fill="#111821" stroke="#528960" stroke-width="1.5"/>
+      <text x="320" y="95" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">ContratoA</text>
+      <circle cx="110" cy="280" r="34" fill="#111821" stroke="#1e2a38" stroke-width="1.5"/>
+      <text x="110" y="285" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">TipoRuta</text>
+      <circle cx="310" cy="270" r="28" fill="#111821" stroke="#1e2a38" stroke-width="1.5"/>
+      <text x="310" y="275" text-anchor="middle" fill="#8a97a8" font-size="14" font-family="Segoe UI">src</text>
     </svg>`
   },
   bara: {
@@ -535,18 +276,18 @@ const TOPOLOGY_SETS = {
       { name: 'registrar', kind: 'primitiva', path: 'bara/log.bara', line: '14', lang: 'Bara', active: false },
       { name: 'Firma', kind: 'contrato', path: 'bara/firma.bara', line: '3', lang: 'Bara', active: false }
     ],
-    svg: `<svg width="420" height="340" viewBox="0 0 420 340" style="max-width:100%;height:auto">
-      <line x1="180" y1="155" x2="115" y2="100" stroke="#528960" stroke-width="1.5"/>
-      <line x1="240" y1="155" x2="305" y2="100" stroke="#528960" stroke-width="1.5"/>
-      <line x1="210" y1="213" x2="210" y2="265" stroke="#3f6d4b" stroke-width="1.5"/>
-      <circle cx="210" cy="175" r="38" fill="#1b3d26" stroke="#528960" stroke-width="2"/>
-      <text x="210" y="180" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">kernel</text>
-      <circle cx="95" cy="85" r="34" fill="#111821" stroke="#3f6d4b" stroke-width="1.5"/>
-      <text x="95" y="90" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">mostrar</text>
-      <circle cx="325" cy="85" r="36" fill="#111821" stroke="#3f6d4b" stroke-width="1.5"/>
-      <text x="325" y="90" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">registrar</text>
-      <circle cx="210" cy="295" r="32" fill="#111821" stroke="#528960" stroke-width="1.5"/>
-      <text x="210" y="300" text-anchor="middle" fill="#e2ecf7" font-size="14" font-family="Segoe UI">Firma</text>
+    svg: `<svg width="420" height="360" viewBox="0 0 420 360" style="max-width:100%;height:auto">
+      <line x1="180" y1="160" x2="115" y2="105" stroke="#528960" stroke-width="1.5"/>
+      <line x1="240" y1="160" x2="305" y2="105" stroke="#528960" stroke-width="1.5"/>
+      <line x1="210" y1="218" x2="210" y2="275" stroke="#3f6d4b" stroke-width="1.5"/>
+      <circle cx="210" cy="180" r="38" fill="#1b3d26" stroke="#528960" stroke-width="2"/>
+      <text x="210" y="185" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">kernel</text>
+      <circle cx="95" cy="90" r="34" fill="#111821" stroke="#3f6d4b" stroke-width="1.5"/>
+      <text x="95" y="95" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">mostrar</text>
+      <circle cx="325" cy="90" r="36" fill="#111821" stroke="#3f6d4b" stroke-width="1.5"/>
+      <text x="325" y="95" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">registrar</text>
+      <circle cx="210" cy="305" r="32" fill="#111821" stroke="#528960" stroke-width="1.5"/>
+      <text x="210" y="310" text-anchor="middle" fill="#d7e3f0" font-size="14" font-family="Segoe UI">Firma</text>
     </svg>`
   }
 };
@@ -554,7 +295,7 @@ const TOPOLOGY_SETS = {
 function renderTopologyNodesList(scope) {
   const data = TOPOLOGY_SETS[scope] || TOPOLOGY_SETS.proyecto;
   return data.nodes.map((n, idx) => `
-    <div class="topology-node-item" role="button" tabindex="0" data-node-idx="${idx}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;${n.active ? 'background:var(--hover)' : ''}">
+    <div class="topology-node-item" data-node-idx="${idx}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;${n.active ? 'background:var(--hover)' : ''}">
       <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft);flex-shrink:0"></span>
       <div style="min-width:0">
         <div style="color:#fff;font-weight:500;font-size:14px">${n.name}</div>
@@ -564,334 +305,827 @@ function renderTopologyNodesList(scope) {
   `).join('');
 }
 
-let currentScreenId = '03';
-let previousScreenId = '01';
-let bottomPanelOpen = true;
-let ephemeralToastTimer = null;
+// 2. CONTADORES COHERENTES: Tabla de Problemas generada desde el único origen de datos (activeProblems)
+function buildProblemsTableHtml() {
+  const rowsHtml = activeProblems.map(p => `
+    <div class="problem-row" role="button" tabindex="0" data-file="${p.file}" data-line="${p.line}" style="display:grid;grid-template-columns:minmax(130px,auto) 1fr auto auto;gap:10px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border2);font-size:14px;cursor:pointer;">
+      <span class="mono" style="color:var(--green-soft)">${p.location}</span>
+      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.message}</span>
+      <span style="color:${p.severity === 'error' ? '#c45c5c' : '#c9a227'}">${p.severity === 'error' ? '✖ error' : '⚠ aviso'}</span>
+      <button type="button" class="btn btn-ghost btn-dismiss-problem" data-dismiss-problem="${p.id}" title="Descartar problema" style="padding:2px 8px;font-size:14px">Descartar</button>
+    </div>
+  `).join('');
 
-function buildScreenHtml(screenId) {
-  switch (screenId) {
-    case '01':
-      return `<main class="main" style="align-items:center;justify-content:center;background:#08090a">
-        <div style="width:700px;max-width:92%">
-          <div style="text-align:center;margin-bottom:18px;color:var(--muted);font-size:14px">
-            <span class="chip" style="margin-bottom:10px">Bara IDE ${APP_VERSION}</span>
-            <div style="margin-top:10px">Atajos: <span class="mono">Ctrl+O</span> abrir · <span class="mono">Ctrl+N</span> nuevo · <span class="mono">Ctrl+Alt+E</span> alternar layout</div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:22px">
-            <div class="card welcome-card" role="button" tabindex="0" style="display:flex;align-items:center;gap:14px;border-color:#2a3a2e;cursor:pointer">
-              <div style="color:var(--green-soft);display:flex">${SVG.folder(20)}</div>
-              <div>
-                <div style="font-size:15px;font-weight:600;color:#fff">Abrir carpeta</div>
-                <div style="font-size:14px;color:var(--muted);margin-top:2px">Abrir una carpeta o proyecto · Ctrl+O</div>
-              </div>
-            </div>
-            <div class="card welcome-card" role="button" tabindex="0" style="display:flex;align-items:center;gap:14px;cursor:pointer">
-              <div style="color:var(--green-soft);display:flex">${SVG.filePlus(20)}</div>
-              <div>
-                <div style="font-size:15px;font-weight:600;color:#fff">Abrir ${OPEN_FILE_PATH}</div>
-                <div style="font-size:14px;color:var(--muted);margin-top:2px">Ir al editor principal · Ctrl+N</div>
-              </div>
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;color:var(--muted);margin-bottom:10px;font-size:14px">
-            <span style="display:inline-flex">${SVG.clock(16)}</span><span style="font-weight:600;color:var(--text)">Proyectos recientes</span>
-          </div>
-          <div class="card" style="padding:8px">
-            <div class="recent-project-item" role="button" tabindex="0" style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.02);cursor:pointer">
-              <span style="color:var(--green-soft);display:inline-flex">${SVG.cube(18)}</span>
-              <div style="flex:1">
-                <div style="font-weight:600;color:#fff;font-size:14px">bara-ide</div>
-                <div class="mono" style="font-size:14px;color:var(--muted)">${DEFAULT_TRUSTED_FOLDER}</div>
-              </div>
-              <span style="color:var(--muted);font-size:14px">Activo</span>
-            </div>
-          </div>
+  return `
+    <div style="display:grid;grid-template-columns:minmax(130px,auto) 1fr auto auto;gap:10px;padding:6px 12px;color:var(--muted);font-size:14px;border-bottom:1px solid var(--border2)">
+      <span>archivo:línea:col</span><span>mensaje</span><span>tipo</span><span>acción</span>
+    </div>
+    ${rowsHtml || '<div style="padding:12px;color:var(--muted);font-size:14px">Sin problemas activos.</div>'}
+  `;
+}
+
+function buildBottomDockHtml() {
+  const summary = computeProblemsSummary(activeProblems);
+  return `<div id="bottom-dock" style="height:210px;border-top:1px solid var(--border);background:#0a0c0d;display:flex;flex-direction:column;flex-shrink:0">
+    <div style="height:36px;display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--border);gap:2px;min-width:0">
+      <div id="bp-tab-problemas" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;background:var(--hover);border-radius:4px;color:#fff;font-weight:600;cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Problemas (${summary.total})</div>
+      <div id="bp-tab-registros" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;flex-shrink:0">Registros</div>
+      <div id="bp-tab-terminal" class="bp-tab" role="button" tabindex="0" style="padding:4px 6px;color:var(--muted);cursor:pointer;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto">Terminal kernel</div>
+      <button type="button" id="bp-more-tabs-btn" class="dock-ctrl-btn" aria-label="Más pestañas" aria-haspopup="menu" aria-expanded="false" title="Más pestañas (»)" style="padding:0 7px;width:auto;font-weight:700;color:var(--green-soft)">»</button>
+      <div style="margin-left:auto;display:flex;gap:2px;align-items:center;flex-shrink:0">
+        <button type="button" id="bp-btn-minimize" class="dock-ctrl-btn" aria-label="Minimizar panel" title="Minimizar panel (Ctrl+J)">${SVG.minimize(16)}</button>
+        <button type="button" id="bp-btn-maximize" class="dock-ctrl-btn" aria-label="Maximizar panel" title="Maximizar panel">${SVG.maximize(16)}</button>
+        <button type="button" id="bp-btn-close" class="dock-ctrl-btn" aria-label="Cerrar panel" title="Cerrar panel (Ctrl+J)">${SVG.close(16)}</button>
+      </div>
+    </div>
+    <div id="bp-content" style="flex:1;overflow:auto">
+      ${buildProblemsTableHtml()}
+    </div>
+  </div>`;
+}
+
+// 1. RECUPERAR la tarjeta de revisión de cambio en el Chat («Revisión de cambio · HELLO.bara»)
+function buildChatReviewCardHtml() {
+  const acceptState = computeAcceptButtonState({
+    patchVerified: reviewCardVerified,
+    strictMode
+  });
+
+  const statusPill = reviewCardVerified
+    ? `<span id="review-card-status-pill" class="chip" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">Verificado</span>`
+    : `<span id="review-card-status-pill" class="chip chip-danger" role="button" tabindex="0" title="Cambiar estado de verificación" style="cursor:pointer;padding:2px 8px">No verificado</span>`;
+
+  let actionAreaHtml = '';
+  if (unverifiedAccepted) {
+    actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#152018;border:1px solid var(--green-mid);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <span style="font-size:14px">Cambio aceptado en <span class="mono">HELLO.bara</span> · respaldo <span class="mono">${unverifiedAcceptedTimestamp}</span></span>
+      <button type="button" id="btn-unverified-undo" class="btn btn-ghost" style="padding:3px 10px;flex-shrink:0">Deshacer</button>
+    </div>`;
+  } else if (!reviewCardVerified) {
+    actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;padding:6px 10px;background:#2a1515;border:1px solid var(--danger);border-radius:8px;color:#f0b0b0;display:flex;flex-direction:column;gap:5px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:6px;font-weight:600">
+          ${SVG.warn(16)}
+          <span>Este cambio NO está verificado</span>
         </div>
-      </main>`;
-
-    case '02':
-      return `<main class="main" style="padding:22px 32px;background:#08090a;overflow:auto">
-        <h1 style="margin:0 0 14px;font-size:20px;font-weight:650;color:#fff">Buscar</h1>
-        <div style="position:relative;margin-bottom:14px;max-width:860px">
-          <div class="field" style="display:flex;align-items:center;gap:10px;padding:10px 14px">
-            <span style="opacity:.7;display:inline-flex">${SVG.search(16)}</span>
-            <span style="flex:1;color:var(--muted)">Buscar función o herramienta</span>
-            <span class="chip mono">Ctrl+Shift+P</span>
-          </div>
+        <div class="row" style="gap:6px">
+          <button type="button" id="btn-unverified-accept" class="btn btn-danger" style="padding:3px 10px" ${acceptState.disabled ? 'disabled aria-disabled="true" title="Modo estricto: verifica antes de aceptar"' : ''}>Aceptar</button>
+          <button type="button" id="btn-unverified-reject" class="btn btn-ghost" style="padding:3px 10px">Rechazar</button>
         </div>
-        <div style="max-width:860px">
-          <div class="search-row" role="button" tabindex="0" data-target="03" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--green-mid);border-radius:10px;margin-bottom:8px;background:var(--hover);cursor:pointer">
-            <div>
-              <div style="font-weight:600;color:#fff;font-size:15px">Chat y Editor (${OPEN_FILE_PATH})</div>
-              <div style="color:var(--muted);font-size:14px;margin-top:2px">Espacio principal con diagnósticos y revisión de parches</div>
-            </div>
-            <span class="mono" style="color:var(--muted);font-size:14px">Ctrl+L</span>
-          </div>
-          <div class="search-row" role="button" tabindex="0" data-target="08" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
-            <div>
-              <div style="font-weight:600;color:#fff;font-size:15px">Constructor visual</div>
-              <div style="color:var(--muted);font-size:14px;margin-top:2px">Lienzo de bloques fuente → sumidero</div>
-            </div>
-            <span class="mono" style="color:var(--muted);font-size:14px">Ctrl+Shift+V</span>
-          </div>
-          <div class="search-row" role="button" tabindex="0" data-target="09" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
-            <div>
-              <div style="font-weight:600;color:#fff;font-size:15px">Topología</div>
-              <div style="color:var(--muted);font-size:14px;margin-top:2px">Grafo de nodos y contratos</div>
-            </div>
-            <span class="mono" style="color:var(--muted);font-size:14px">Ctrl+Shift+T</span>
-          </div>
-          <div class="search-row" role="button" tabindex="0" data-target="13" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
-            <div>
-              <div style="font-weight:600;color:#fff;font-size:15px">Ajustes</div>
-              <div style="color:var(--muted);font-size:14px;margin-top:2px">Modo estricto, carpeta de confianza y proveedor</div>
-            </div>
-            <span class="mono" style="color:var(--muted);font-size:14px">Ctrl+,</span>
-          </div>
+      </div>
+      ${acceptState.disabled ? `<div id="strict-mode-block-msg" style="font-size:14px;color:#ffd0d0">${acceptState.explanation}</div>` : ''}
+    </div>`;
+  } else {
+    actionAreaHtml = `<div id="unverified-patch-notice" role="status" style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <span style="color:var(--green-soft);font-size:14px">Verificado por el kernel ✓</span>
+      <div class="row" style="gap:6px">
+        <button type="button" id="btn-unverified-accept" class="btn btn-primary" style="padding:3px 10px">Aceptar</button>
+        <button type="button" id="btn-unverified-reject" class="btn btn-ghost" style="padding:3px 10px">Rechazar</button>
+      </div>
+    </div>`;
+  }
+
+  return `<div id="chat-review-card" class="card" style="padding:8px 12px;border-color:${reviewCardVerified ? 'var(--green-mid)' : '#5a3030'};display:flex;flex-direction:column;gap:4px;max-width:460px;flex-shrink:0">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <strong style="font-size:14px;color:#fff">Revisión de cambio · <span class="mono">HELLO.bara</span></strong>
+      ${statusPill}
+    </div>
+    <div style="font-size:14px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px">
+      <span>Archivo: <span class="mono" style="color:var(--text)">HELLO.bara</span></span>
+      <span>Líneas: <span class="mono" style="color:var(--text)">3–6</span></span>
+      <span>Funciones: <span class="mono" style="color:var(--text)">main()</span></span>
+    </div>
+    <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:14px;line-height:1.35">
+      <div class="diff-del">-   mostrar("hola")</div>
+      <div class="diff-add">+   mostrar("Bara IDE")</div>
+      <div class="diff-add">+   registrar("ok")</div>
+    </div>
+    ${actionAreaHtml}
+  </div>`;
+}
+
+function getScreen06Html() {
+  const acceptState = computeAcceptButtonState({
+    patchVerified: false,
+    strictMode
+  });
+  return `${SIDEBAR_HTML}
+    <section class="main" style="border-right:1px solid var(--border)">
+      <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail)">
+        <strong>Chat</strong>
+        <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
+      </div>
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+        <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:8px 12px;border-radius:12px">Añade mostrar_todo()</div>
+        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 12px;border-radius:12px;max-width:440px">
+          <div style="margin-bottom:6px">Parche propuesto (sin verificación del kernel).</div>
+          <span class="chip-danger chip" style="display:inline-flex">Código inventado: la función mostrar_todo() no existe</span>
         </div>
-      </main>`;
-
-    case '03':
-    case '04':
-    case '05':
-    case '06':
-    case '11':
-    case '14':
-      return buildMainWorkspaceScreenHtml(bottomPanelOpen);
-
-    case '07':
-      return `<main class="main" style="padding:22px 28px;background:#08090a;overflow:auto">
-        <h1 style="margin:0 0 6px;font-size:20px;color:#fff">Herramientas</h1>
-        <p style="margin:0 0 16px;color:var(--muted)">Acceso a las funciones del IDE fuera del rail principal.</p>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:980px">
-          <div class="card tool-card" role="button" tabindex="0" data-tool="08" style="min-height:105px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="color:var(--green-soft);display:inline-flex">${SVG.puzzle(20)}</span>
-              <strong style="font-size:15px;color:#fff">Constructor visual</strong>
-            </div>
-            <div style="color:var(--muted);font-size:14px">Lienzo de bloques fuente → sumidero, traducir y firmar</div>
-          </div>
-          <div class="card tool-card" role="button" tabindex="0" data-tool="09" style="min-height:105px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="color:var(--green-soft);display:inline-flex">${SVG.network(20)}</span>
-              <strong style="font-size:15px;color:#fff">Topología</strong>
-            </div>
-            <div style="color:var(--muted);font-size:14px">Grafo de archivos, funciones y contratos del proyecto</div>
-          </div>
-          <div class="card tool-card" role="button" tabindex="0" data-tool="10" style="min-height:105px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="color:var(--green-soft);display:inline-flex">${SVG.git(20)}</span>
-              <strong style="font-size:15px;color:#fff">Git</strong>
-            </div>
-            <div style="color:var(--muted);font-size:14px">Control de versiones, validación de URL github.com y commits</div>
-          </div>
-          <div class="card tool-card" role="button" tabindex="0" data-tool="11" style="min-height:105px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
-            <div style="display:flex;align-items:center;gap:10px">
-              <span style="color:var(--green-soft);display:inline-flex">${SVG.warn(20)}</span>
-              <strong style="font-size:15px;color:#fff">Problemas</strong>
-            </div>
-            <div style="color:var(--muted);font-size:14px">Diagnósticos TokenKind::Diagnostic del editor</div>
-          </div>
+        ${buildChatReviewCardHtml()}
+      </div>
+      ${COMPOSER_HTML}
+    </section>
+    <aside class="editor-pane">
+      <div class="banner banner-warn" role="status" style="justify-content:space-between">
+        <span style="display:inline-flex;align-items:center;gap:8px">${SVG.warn(18)} <span>Este cambio <strong>NO</strong> está verificado por el kernel</span></span>
+        <div class="row">
+          <button class="btn btn-primary">Rechazar</button>
+          <button class="btn btn-danger" ${acceptState.disabled ? 'disabled aria-disabled="true" title="Modo estricto: verifica antes de aceptar"' : ''}>Aceptar de todos modos</button>
         </div>
-      </main>`;
+      </div>
+      ${buildTabbar(true)}
+      <div class="code">
+        <div class="gutter"><div>1</div><div>2</div><div>3</div><div>4</div><div>4</div><div>5</div><div>6</div><div>6</div><div>7</div></div>
+        <div class="code-body"><div>funcion main() {</div><div>  variables x = 10</div><div>  si x &gt; 5 {</div><div class="diff-del">-   mostrar("hola")</div><div class="diff-add">+   mostrar("Bara IDE")</div><div class="diff-add">+   mostrar_todo()</div><div class="diff-add">+   registrar("ok")</div><div>  }</div><div>}</div></div>
+      </div>
+    </aside>`;
+}
 
-    case '08':
-      return `${SIDEBAR_HTML}
-      <section class="main">
-        <div style="height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail);flex-shrink:0">
-          <strong style="font-size:15px">Constructor visual</strong>
+// 3. AJUSTES: AÑADIR Carpeta de confianza (C:/Users/Vexor/Downloads/bara-ide + Cambiar…), Autoguardado (encendido por defecto) y Recordar clave DESMARCADO por defecto
+function getScreen13Html() {
+  const isLocal = aiProvider === 'Modelo local (GGUF)';
+  return `<main class="main" style="padding:12px 24px;background:#08090a;overflow:auto">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <h1 style="margin:0;font-size:22px;color:#fff">Ajustes</h1>
+        <span class="chip">Conexión OK</span>
+        <span class="chip mono">Versión ${APP_VERSION}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:980px">
+        <div class="card" style="display:flex;flex-direction:column;gap:8px;padding:12px 16px">
+          <div class="row" style="justify-content:space-between">
+            <span>Offline</span><div class="toggle"></div>
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <span>GGUF</span><div class="toggle ${isLocal ? 'on' : ''}"></div>
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <span>Modo estricto</span>
+              <div style="font-size:14px;color:var(--muted)">Bloquea Aceptar en cambios no verificados</div>
+            </div>
+            <button type="button" id="toggle-strict-mode" role="switch" aria-checked="${strictMode ? 'true' : 'false'}" aria-label="Modo estricto" class="toggle ${strictMode ? 'on' : ''}"></button>
+          </div>
+          <div class="row" style="justify-content:space-between">
+            <span>Autoguardado</span>
+            <button type="button" id="toggle-autosave" role="switch" aria-checked="${autosave ? 'true' : 'false'}" aria-label="Autoguardado" class="toggle ${autosave ? 'on' : ''}"></button>
+          </div>
+          <div>
+            <label class="label" for="settings-provider-select">Proveedor</label>
+            <select id="settings-provider-select" class="field" aria-label="Proveedor de IA">
+              <option value="DeepSeek" ${!isLocal ? 'selected' : ''}>DeepSeek ▾</option>
+              <option value="Modelo local (GGUF)" ${isLocal ? 'selected' : ''}>Modelo local (GGUF)</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Modelo</label>
+            <div class="field mono">${isLocal ? 'No hay pesos locales cargados' : 'deepseek-chat'}</div>
+          </div>
+          <div>
+            <label class="label">Clave conexión</label>
+            <div class="field" style="color:var(--muted)">····················</div>
+          </div>
           <div class="row">
-            <button type="button" class="btn btn-ghost">Traducir y firmar</button>
-            <button type="button" class="btn btn-ghost">Ejemplo</button>
-            <button type="button" class="btn btn-ghost"><span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span> Emitir .bara</button>
+            <button class="btn btn-ghost">Listar modelos</button>
+            <button class="btn btn-ghost">Probar conexión</button>
+          </div>
+          <div>
+            <label class="label">Raíz de la API</label>
+            <div class="field mono" style="font-size:14px">https://api.deepseek.com/v1</div>
           </div>
         </div>
-        <div style="flex:1;display:flex;min-height:0;min-width:0">
-          <div style="flex:1.35;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:#070a0e">
-            <div style="padding:10px 16px;font-size:14px;color:var(--text)">Lienzo</div>
-            <div style="flex:1;display:flex;align-items:center;justify-content:center;position:relative;padding:12px 10px;min-width:0;overflow:auto">
-              <div style="display:grid;grid-template-columns:minmax(115px,160px) minmax(158px,185px);gap:10px;justify-content:center;align-items:stretch;width:100%;position:relative;z-index:1;min-width:0">
-                <div style="min-width:0;padding:10px 8px;background:#183120;border:2px solid #3f6d4b;border-radius:12px;text-align:center">
-                  <div style="font-size:14px;font-weight:600;color:#84a989;letter-spacing:.02em">FUENTE</div>
-                  <div class="mono" style="font-size:14px;margin-top:4px;color:#fff">fuente_in</div>
-                </div>
-                <div style="min-width:0;padding:10px 8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;text-align:center">
-                  <div style="font-size:14px;font-weight:600;color:#fff;letter-spacing:.02em">TRANSFORMAR</div>
-                  <div class="mono" style="font-size:14px;margin-top:4px;color:var(--green-soft)">transformar_saludo</div>
-                </div>
-                <div style="min-width:0;padding:10px 8px;background:#1b3d26;border:2px solid #528960;border-radius:12px;text-align:center">
-                  <div style="font-size:14px;font-weight:600;color:#fff;letter-spacing:.02em">GUARDIA</div>
-                  <div class="mono" style="font-size:14px;margin-top:4px;color:#84a989">guardia_firma</div>
-                </div>
-                <div style="min-width:0;padding:10px 8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;text-align:center">
-                  <div style="font-size:14px;font-weight:600;color:#fff;letter-spacing:.02em">SUMIDERO</div>
-                  <div class="mono" style="font-size:14px;margin-top:4px;color:#fff">sumidero_out</div>
-                </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="card" style="border-style:dashed;padding:12px 16px">
+            <div style="font-weight:600;margin-bottom:6px">Avanzado</div>
+            <div class="row" style="justify-content:space-between;margin-bottom:6px">
+              <span>Temperatura</span>
+              <span class="mono">0.2</span>
+            </div>
+            <div style="height:6px;background:#1e2a38;border-radius:999px;margin-bottom:8px">
+              <div style="width:20%;height:100%;background:var(--green-soft);border-radius:999px"></div>
+            </div>
+            <div>
+              <label class="label">Máximo de tokens</label>
+              <div class="field mono">4096</div>
+            </div>
+            <div style="margin-top:6px">
+              <label class="label">Prompt del sistema</label>
+              <div class="field" style="min-height:44px">Eres el asistente oficial del lenguaje Bara.</div>
+            </div>
+            <label id="label-remember-key" class="row" style="margin-top:8px;color:var(--muted);cursor:pointer">
+              <span id="check-remember-key" class="check ${rememberKey ? 'on' : ''}">${rememberKey ? '✓' : ''}</span> Recordar clave en llavero local
+            </label>
+          </div>
+          <div class="card" style="padding:12px 16px">
+            <div style="font-weight:600;margin-bottom:6px">Carpeta de confianza</div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input id="trusted-folder-input" class="field mono" readonly value="${trustedFolder}" aria-label="Carpeta de confianza"/>
+              <button type="button" id="btn-change-trusted-folder" class="btn btn-ghost" style="flex-shrink:0">Cambiar…</button>
+            </div>
+          </div>
+          <div class="card" style="padding:10px 16px">
+            <div style="font-weight:600;margin-bottom:6px">Ajustes de interfaz</div>
+            <div class="row" style="justify-content:space-between;margin-bottom:4px">
+              <span>Tamaño de letra</span>
+              <span class="mono">14 px mínimo</span>
+            </div>
+            <div class="row" style="justify-content:space-between;margin-bottom:4px">
+              <span>Tema</span>
+              <span>Oscuro (BARA)</span>
+            </div>
+            <div class="row" style="justify-content:space-between">
+              <span>Versión</span>
+              <span class="mono">${APP_VERSION}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;gap:10px">
+        <button class="btn btn-primary">${SVG.save(16)} Guardar</button>
+        <button class="btn btn-ghost">Valores de fábrica</button>
+        <button class="btn btn-danger">Olvidar</button>
+      </div>
+    </main>`;
+}
+
+function getScreen12Html() {
+  const rows = getActiveRegistros().map(r => `
+    <div class="mono" style="padding:6px 0;border-bottom:1px solid rgba(30,42,56,.5)">
+      <span style="color:var(--muted)">${r.time}</span>
+      <span style="color:${r.color};font-weight:600"> [${r.level}]</span>
+      <span> ${r.text}</span>
+    </div>
+  `).join('');
+
+  return `<main class="main" style="padding:22px 32px;background:#08090a">
+    <h1 style="margin:0 0 14px;font-size:22px;color:var(--green-soft)">Registros</h1>
+    <div class="row" style="margin-bottom:14px;flex-wrap:wrap">
+      <span class="chip" style="background:var(--green-dim);color:#fff;border-color:var(--green-mid)">Todo</span><span class="chip">Errores</span><span class="chip">Avisos</span><span class="chip">Info</span>
+      <input class="field" style="max-width:280px;margin-left:auto" placeholder="Filtrar registros…"/>
+    </div>
+    <div class="card" style="max-width:1000px;font-size:14px;line-height:1.5">
+      ${rows}
+    </div>
+  </main>`;
+}
+
+const SCREENS = {
+  "01": {
+    "id": "01",
+    "rail": "Archivos",
+    "label": "01 · Bienvenida",
+    "html": `<main class="main" style="align-items:center;justify-content:center;background:#08090a">
+      <div style="width:700px;max-width:92%">
+        <div style="text-align:center;margin-bottom:18px;color:var(--muted);font-size:14px">
+          <span class="chip" style="margin-bottom:10px">Sin carpeta abierta</span>
+          <div style="margin-top:10px">Atajos: <span class="mono">Ctrl+O</span> abrir · <span class="mono">Ctrl+N</span> nuevo</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:22px">
+          <div class="card" role="button" tabindex="0" style="display:flex;align-items:center;gap:14px;border-color:#2a3a2e;cursor:pointer">
+            <div style="color:var(--green-soft);display:flex">${SVG.folder(20)}</div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:#fff">Abrir carpeta</div>
+              <div style="font-size:14px;color:var(--muted);margin-top:2px">Abrir una carpeta o proyecto · Ctrl+O</div>
+            </div>
+          </div>
+          <div class="card" role="button" tabindex="0" style="display:flex;align-items:center;gap:14px;cursor:pointer">
+            <div style="color:var(--green-soft);display:flex">${SVG.filePlus(20)}</div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:#fff">Nuevo archivo .bara</div>
+              <div style="font-size:14px;color:var(--muted);margin-top:2px">Crear script vacío · Ctrl+N</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;color:var(--muted);margin-bottom:10px;font-size:14px">
+          <span style="display:inline-flex">${SVG.clock(16)}</span><span style="font-weight:600;color:var(--text)">Proyectos recientes</span>
+        </div>
+        <div class="card" style="padding:8px">
+          <div class="recent-project-item" role="button" tabindex="0" style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:8px;background:rgba(255,255,255,0.02);cursor:pointer">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.cube(18)}</span>
+            <div style="flex:1">
+              <div style="font-weight:600;color:#fff;font-size:14px">genesis_engine</div>
+              <div class="mono" style="font-size:14px;color:var(--muted)">~/proyectos/genesis_engine</div>
+            </div>
+            <span style="color:var(--muted);font-size:14px">Hace 2 días</span>
+          </div>
+          <div class="recent-project-item" role="button" tabindex="0" style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:8px;cursor:pointer">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.cube(18)}</span>
+            <div style="flex:1">
+              <div style="font-weight:600;color:#fff;font-size:14px">shoresh_met_lib</div>
+              <div class="mono" style="font-size:14px;color:var(--muted)">~/proyectos/shoresh_met_lib</div>
+            </div>
+            <span style="color:var(--muted);font-size:14px">Hace 5 días</span>
+          </div>
+        </div>
+      </div>
+    </main>`
+  },
+  "02": {
+    "id": "02",
+    "rail": "Buscar",
+    "label": "02 · Buscar",
+    "html": `<main class="main" style="padding:28px 40px;background:#08090a">
+      <h1 style="margin:0 0 16px;font-size:22px;font-weight:650;color:#fff">Buscar</h1>
+      <div style="position:relative;margin-bottom:18px">
+        <div class="field" style="display:flex;align-items:center;gap:10px;padding:12px 14px">
+          <span style="opacity:.7;display:inline-flex">${SVG.search(16)}</span>
+          <span style="flex:1;color:var(--muted)">Buscar función o herramienta</span>
+          <span class="chip mono">Ctrl+Shift+P</span>
+        </div>
+      </div>
+      <div style="max-width:860px">
+        <div class="search-row" role="button" tabindex="0" data-target="01" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--green-mid);border-radius:10px;margin-bottom:8px;background:var(--hover);cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Abrir carpeta</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Seleccionar directorio de proyecto</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+O</span>
+        </div>
+        <div class="search-row" role="button" tabindex="0" data-target="03" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Nuevo archivo .bara</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Crear nuevo script</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+N</span>
+        </div>
+        <div class="search-row" role="button" tabindex="0" data-target="03" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Chat asistente</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Iniciar nueva conversación</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+L</span>
+        </div>
+        <div class="search-row" role="button" tabindex="0" data-target="12" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Registros</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Ver registro de eventos</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+Shift+L</span>
+        </div>
+        <div class="search-row" role="button" tabindex="0" data-target="09" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Topología</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Navegación de nodos y conexiones</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+Shift+T</span>
+        </div>
+        <div class="search-row" role="button" tabindex="0" data-target="08" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Constructor visual</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Interfaz gráfica de diseño</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+Shift+V</span>
+        </div>
+        <div class="search-row" role="button" tabindex="0" data-target="13" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border:1px solid var(--border2);border-radius:10px;margin-bottom:8px;cursor:pointer">
+          <div>
+            <div style="font-weight:600;color:#fff;font-size:15px">Ajustes</div>
+            <div style="color:var(--muted);font-size:14px;margin-top:2px">Configuración general</div>
+          </div>
+          <span class="mono" style="color:var(--muted);font-size:14px;background:#0d1218;padding:4px 8px;border-radius:6px;border:1px solid var(--border)">Ctrl+,</span>
+        </div>
+      </div>
+    </main>`
+  },
+  "03": {
+    "id": "03",
+    "rail": "Chat",
+    "label": "03 · Chat + Editor",
+    get html() {
+      return `${SIDEBAR_HTML}
+      <section class="main" style="border-right:1px solid var(--border)">
+        <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail);flex-shrink:0">
+          <strong style="font-size:15px">Chat</strong>
+          <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
+        </div>
+        <div style="height:28px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
+          <span class="mono" style="color:var(--text)">HELLO.bara</span>
+        </div>
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+          <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
+            <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
+            <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
+            <div style="color:var(--green-soft)">✓ Confirmé firma</div>
+          </div>
+          <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:8px 12px;border-radius:12px;max-width:320px">¿Qué hace este código?</div>
+          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 12px;border-radius:12px;max-width:440px">
+            <p style="margin:0 0 6px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
+            <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
+          </div>
+          ${buildChatReviewCardHtml()}
+        </div>
+        ${COMPOSER_HTML}
+      </section>
+      <aside class="editor-pane">
+        ${buildTabbar(true)}
+        ${buildEditorWithDiagnosticsHtml()}
+      </aside>`;
+    }
+  },
+  "04": {
+    "id": "04",
+    "rail": "Chat",
+    "label": "04 · Cambio propuesto (diff)",
+    "html": `${SIDEBAR_HTML}
+    <section class="main" style="border-right:1px solid var(--border)">
+      <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail)">
+        <strong>Chat</strong>
+        <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
+      </div>
+      <div style="flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:12px">
+        <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:10px 14px;border-radius:12px">Mejora el saludo y registra el resultado</div>
+        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:12px 14px;border-radius:12px;max-width:440px">
+          <div style="margin-bottom:8px">Propongo este cambio en el cuerpo de <span class="mono">main</span>.</div>
+          <span class="chip">Toca: HELLO.bara (líneas 3–6)</span>
+          <div style="margin-top:10px;font-size:14px;color:var(--muted)">Se creará respaldo en <span class="mono">.bara-backup/</span> al aceptar.</div>
+        </div>
+      </div>
+      ${COMPOSER_HTML}
+    </section>
+    <aside class="editor-pane">
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border);background:#122018;display:flex;flex-direction:column;gap:8px;flex-shrink:0">
+        <div style="font-size:14px;white-space:nowrap">
+          <strong>Cambio propuesto</strong> · <span class="mono">HELLO.bara</span>
+          · <span style="color:var(--green-soft)">+3</span> <span style="color:#c99">−1</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span class="chip" style="white-space:nowrap">Verificado por el kernel ✓</span>
+          <div class="row" style="flex-shrink:0;gap:6px;margin-left:auto">
+            <button class="btn btn-ghost" style="padding:5px 10px">Rechazar</button>
+            <button class="btn btn-primary" style="padding:5px 10px">Aceptar</button>
+          </div>
+        </div>
+      </div>
+      ${buildTabbar(true)}
+      <div class="code">
+        <div class="gutter"><div>1</div><div>2</div><div>3</div><div>4</div><div>4</div><div>5</div><div>6</div><div>6</div><div>7</div></div>
+        <div class="code-body"><div>funcion main() {</div><div>  variables x = 10</div><div>  si x &gt; 5 {</div><div class="diff-del">-   mostrar("hola")</div><div class="diff-add">+   mostrar("Bara IDE")</div><div class="diff-add">+   registrar("ok")</div><div class="diff-add">+   devolver x</div><div>  }</div><div>}</div></div>
+      </div>
+    </aside>`
+  },
+  "05": {
+    "id": "05",
+    "rail": "Chat",
+    "label": "05 · Cambio aplicado",
+    "html": `${SIDEBAR_HTML}
+    <section class="main" style="border-right:1px solid var(--border);position:relative">
+      <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail)">
+        <strong>Chat</strong>
+        <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
+      </div>
+      <div style="flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:12px">
+        <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:12px 14px;border-radius:12px;max-width:420px">
+          Cambio aplicado. Puedes deshacer desde el aviso inferior.
+        </div>
+      </div>
+      ${COMPOSER_HTML}
+    </section>
+    <aside class="editor-pane">
+      ${buildTabbar(false)}
+      <div class="code">
+        <div class="gutter"><div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div></div>
+        <div class="code-body"><div>funcion main() {</div><div>  variables x = 10</div><div>  si x &gt; 5 {</div><div>    mostrar("Bara IDE")</div><div>    registrar("ok")</div><div>  }</div><div>}</div></div>
+      </div>
+      <div class="toast" id="toast-05" style="bottom:24px;left:50%;transform:translateX(-50%);width:calc(100% - 24px);justify-content:space-between">
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis">Cambio aplicado a <span class="mono">HELLO.bara</span> · respaldo guardado</span>
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:auto">
+          <button type="button" class="btn btn-ghost" style="padding:4px 10px;flex-shrink:0" id="toast-deshacer-btn">Deshacer</button>
+          <button type="button" id="toast-close-btn" class="icon-close-btn" aria-label="Cerrar notificación">${SVG.close(16)}</button>
+        </div>
+      </div>
+    </aside>`
+  },
+  "06": {
+    "id": "06",
+    "rail": "Chat",
+    "label": "06 · Cambio no verificado",
+    get html() {
+      return getScreen06Html();
+    }
+  },
+  "07": {
+    "id": "07",
+    "rail": "Herramientas",
+    "label": "07 · Herramientas hub",
+    "html": `<main class="main" style="padding:24px 32px;background:#08090a">
+      <h1 style="margin:0 0 6px;font-size:22px;color:#fff">Herramientas</h1>
+      <p style="margin:0 0 18px;color:var(--muted)">Acceso a las funciones del IDE fuera del rail principal.</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:980px">
+        <div class="card tool-card" role="button" tabindex="0" data-tool="08" style="min-height:110px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.puzzle(20)}</span>
+            <strong style="font-size:16px;color:#fff">Constructor visual</strong>
+          </div>
+          <div style="color:var(--muted);font-size:14px;line-height:1.45">Lienzo de bloques fuente → sumidero, traducir y firmar</div>
+        </div>
+        <div class="card tool-card" role="button" tabindex="0" data-tool="09" style="min-height:110px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.network(20)}</span>
+            <strong style="font-size:16px;color:#fff">Topología</strong>
+          </div>
+          <div style="color:var(--muted);font-size:14px;line-height:1.45">Grafo de archivos, funciones y contratos del proyecto</div>
+        </div>
+        <div class="card tool-card" role="button" tabindex="0" data-tool="10" style="min-height:110px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.git(20)}</span>
+            <strong style="font-size:16px;color:#fff">Git</strong>
+          </div>
+          <div style="color:var(--muted);font-size:14px;line-height:1.45">Control de versiones, commits y archivos cambiados</div>
+        </div>
+        <div class="card tool-card" role="button" tabindex="0" data-tool="11" style="min-height:110px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.warn(20)}</span>
+            <strong style="font-size:16px;color:#fff">Problemas</strong>
+          </div>
+          <div style="color:var(--muted);font-size:14px;line-height:1.45">Diagnósticos del editor y del kernel</div>
+        </div>
+        <div class="card tool-card" role="button" tabindex="0" data-tool="asistencia" style="min-height:110px;display:flex;flex-direction:column;gap:8px;cursor:pointer">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:var(--green-soft);display:inline-flex">${SVG.help(20)}</span>
+            <strong style="font-size:16px;color:#fff">Asistencia</strong>
+          </div>
+          <div style="color:var(--muted);font-size:14px;line-height:1.45">Ventana de ayuda y documentación contextual</div>
+        </div>
+      </div>
+    </main>`
+  },
+  "08": {
+    "id": "08",
+    "rail": "Herramientas",
+    "label": "08 · Constructor visual",
+    "html": `${SIDEBAR_HTML}
+    <section class="main">
+      <div style="height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail);flex-shrink:0">
+        <strong style="font-size:16px">Constructor visual</strong>
+        <div class="row">
+          <button class="btn btn-ghost">Traducir y firmar</button>
+          <button class="btn btn-ghost">Ejemplo</button>
+          <button class="btn btn-ghost"><span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span> Emitir .bara</button>
+        </div>
+      </div>
+      <div style="flex:1;display:flex;min-height:0;min-width:0">
+        <div style="flex:1.35;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:#070a0e">
+          <div style="padding:10px 16px;font-size:14px;color:var(--text)">Lienzo</div>
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;position:relative;padding:12px 10px;min-width:0;overflow:auto">
+            <div style="display:grid;grid-template-columns:minmax(115px,160px) minmax(158px,185px);gap:10px;justify-content:center;align-items:stretch;width:100%;position:relative;z-index:1;min-width:0">
+              <div style="min-width:0;padding:10px 8px;background:#183120;border:2px solid #3f6d4b;border-radius:12px;text-align:center">
+                <div style="font-size:14px;font-weight:600;color:#84a989;letter-spacing:.02em">FUENTE</div>
+                <div class="mono" style="font-size:14px;margin-top:4px;color:#fff">fuente_in</div>
+              </div>
+              <div style="min-width:0;padding:10px 8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;text-align:center">
+                <div style="font-size:14px;font-weight:600;color:#fff;letter-spacing:.02em">TRANSFORMAR</div>
+                <div class="mono" style="font-size:14px;margin-top:4px;color:var(--green-soft)">transformar_saludo</div>
+              </div>
+              <div style="min-width:0;padding:10px 8px;background:#1b3d26;border:2px solid #528960;border-radius:12px;text-align:center">
+                <div style="font-size:14px;font-weight:600;color:#fff;letter-spacing:.02em">GUARDIA</div>
+                <div class="mono" style="font-size:14px;margin-top:4px;color:#84a989">guardia_firma</div>
+              </div>
+              <div style="min-width:0;padding:10px 8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;text-align:center">
+                <div style="font-size:14px;font-weight:600;color:#fff;letter-spacing:.02em">SUMIDERO</div>
+                <div class="mono" style="font-size:14px;margin-top:4px;color:#fff">sumidero_out</div>
               </div>
             </div>
-            <div style="border-top:1px solid var(--border);padding:10px 16px;background:var(--rail);flex-shrink:0">
-              <div style="font-weight:600;margin-bottom:6px">Informe del kernel</div>
-              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px 12px;font-size:14px">
-                <label class="row" style="color:var(--muted)"><span class="check on">✓</span>bloques</label>
-                <label class="row" style="color:var(--muted)"><span class="check on">✓</span>aristas</label>
-                <label class="row" style="color:var(--muted)"><span class="check"></span>riesgo</label>
-                <label class="row" style="color:var(--muted)"><span class="check on">✓</span>sintaxis</label>
-                <label class="row" style="color:var(--muted)"><span class="check on">✓</span>tipos</label>
-                <label class="row" style="color:var(--muted)"><span class="check on">✓</span>compatibilidad</label>
-                <label class="row" style="color:var(--muted)"><span class="check"></span>latencia</label>
-                <label class="row" style="color:var(--muted)"><span class="check on">✓</span>firma válida</label>
-              </div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding:12px 16px;background:var(--rail);flex-shrink:0">
+            <div style="font-weight:600;margin-bottom:8px">Informe del kernel</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px 12px;font-size:14px">
+              <label class="row" style="color:var(--muted)"><span class="check on">✓</span>bloques</label>
+              <label class="row" style="color:var(--muted)"><span class="check on">✓</span>aristas</label>
+              <label class="row" style="color:var(--muted)"><span class="check"></span>riesgo</label>
+              <label class="row" style="color:var(--muted)"><span class="check on">✓</span>sintaxis</label>
+              <label class="row" style="color:var(--muted)"><span class="check on">✓</span>tipos</label>
+              <label class="row" style="color:var(--muted)"><span class="check on">✓</span>compatibilidad</label>
+              <label class="row" style="color:var(--muted)"><span class="check"></span>latencia</label>
+              <label class="row" style="color:var(--muted)"><span class="check on">✓</span>firma válida</label>
             </div>
           </div>
-          <aside id="constructor-blueprint-aside" style="flex:1.15;min-width:290px;display:flex;flex-direction:column;background:var(--rail);overflow:hidden">
-            <div style="height:36px;display:flex;align-items:center;padding:0 12px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:14px;flex-shrink:0">Blueprint JSON</div>
-            <div class="code" style="font-size:14px;line-height:1.5;overflow:auto">
-              <div class="gutter" id="constructor-blueprint-gutter" style="font-size:14px">${DEFAULT_BP.gutterHtml}</div>
-              <div class="code-body" id="constructor-blueprint-code" style="font-size:14px;padding:10px 8px;overflow:auto;white-space:pre">${DEFAULT_BP.codeHtml}</div>
-            </div>
-          </aside>
         </div>
-      </section>`;
-
-    case '09':
-      return `<main class="main" style="flex-direction:row;background:#08090a">
-        <div style="width:200px;flex-shrink:0;border-right:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px">
-          <strong style="font-size:16px">Topología</strong>
-          <!-- Único role="alert" permitido en toda la maqueta: el de mapa/topología -->
-          <div id="topology-alert" role="alert" style="font-size:14px;color:var(--green-soft);background:#132419;border:1px solid #3f6d4b;padding:4px 8px;border-radius:6px">
-            Mapa topológico sincronizado
+        <aside id="constructor-blueprint-aside" style="flex:1.15;min-width:290px;display:flex;flex-direction:column;background:var(--rail);overflow:hidden">
+          <div style="height:36px;display:flex;align-items:center;padding:0 12px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:14px;flex-shrink:0">Blueprint JSON</div>
+          <div class="code" style="font-size:14px;line-height:1.5;overflow:auto">
+            <div class="gutter" id="constructor-blueprint-gutter" style="font-size:14px">${DEFAULT_BP.gutterHtml}</div>
+            <div class="code-body" id="constructor-blueprint-code" style="font-size:14px;padding:10px 8px;overflow:auto;white-space:pre">${DEFAULT_BP.codeHtml}</div>
           </div>
-          <div id="topology-scope-selector" style="display:flex;background:#0d1218;border:1px solid var(--border);border-radius:999px;overflow:hidden">
-            <div id="topology-seg-proyecto" role="button" tabindex="0" data-scope="proyecto" style="flex:1;text-align:center;padding:7px;background:var(--green-dim);color:#fff;font-weight:600;cursor:pointer;font-size:14px">Proyecto</div>
-            <div id="topology-seg-bara" role="button" tabindex="0" data-scope="bara" style="flex:1;text-align:center;padding:7px;color:var(--muted);cursor:pointer;font-size:14px">Bara</div>
-          </div>
-          <div id="topology-node-list" style="display:flex;flex-direction:column;gap:4px">
-            ${renderTopologyNodesList('proyecto')}
-          </div>
+        </aside>
+      </div>
+    </section>`
+  },
+  "09": {
+    "id": "09",
+    "rail": "Herramientas",
+    "label": "09 · Topología",
+    "html": `<main class="main" style="flex-direction:row;background:#08090a">
+      <div style="width:200px;flex-shrink:0;border-right:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px">
+        <strong style="font-size:16px">Topología</strong>
+        <div id="topology-scope-selector" style="display:flex;background:#0d1218;border:1px solid var(--border);border-radius:999px;overflow:hidden">
+          <div id="topology-seg-proyecto" role="button" tabindex="0" data-scope="proyecto" style="flex:1;text-align:center;padding:7px;background:var(--green-dim);color:#fff;font-weight:600;cursor:pointer;font-size:14px">Proyecto</div>
+          <div id="topology-seg-bara" role="button" tabindex="0" data-scope="bara" style="flex:1;text-align:center;padding:7px;color:var(--muted);cursor:pointer;font-size:14px">Bara</div>
         </div>
-        <div id="topology-graph-view" style="flex:1;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;background:#070a0e;padding:12px">
-          ${TOPOLOGY_SETS.proyecto.svg}
+        <div id="topology-node-list" style="display:flex;flex-direction:column;gap:4px">
+          ${renderTopologyNodesList('proyecto')}
         </div>
-        <div style="width:240px;flex-shrink:0;border-left:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--rail)">
-          <div>
-            <strong style="font-size:16px">Propiedades</strong>
-            <div style="font-size:14px;color:var(--muted);margin-top:2px">detalle del nodo (solo lectura)</div>
-          </div>
-          <div>
-            <label class="label">ruta</label>
-            <input id="topo-prop-ruta" class="field mono" readonly value="samples/genesis.bara"/>
-          </div>
-          <div>
-            <label class="label">línea</label>
-            <input id="topo-prop-linea" class="field mono" readonly value="1"/>
-          </div>
-          <div>
-            <label class="label">tipo</label>
-            <input id="topo-prop-tipo" class="field" readonly value="archivo"/>
-          </div>
-          <div>
-            <label class="label">lenguaje</label>
-            <input id="topo-prop-lenguaje" class="field" readonly value="Bara"/>
-          </div>
-          <button type="button" class="btn btn-ghost" style="justify-content:center">Abrir en el editor</button>
-          <button type="button" class="btn btn-primary" style="justify-content:center">Actualizar grafo</button>
+      </div>
+      <div id="topology-graph-view" role="alert" aria-label="Grafo de topología" style="flex:1;min-width:0;position:relative;display:flex;align-items:center;justify-content:center;background:#070a0e;padding:12px">
+        ${TOPOLOGY_SETS.proyecto.svg}
+      </div>
+      <div style="width:240px;flex-shrink:0;border-left:1px solid var(--border);padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--rail)">
+        <div>
+          <strong style="font-size:16px">Propiedades</strong>
+          <div style="font-size:14px;color:var(--muted);margin-top:2px">detalle del nodo (solo lectura)</div>
         </div>
-      </main>`;
-
-    case '10':
-      return `<main class="main" style="padding:18px 26px;background:#08090a;position:relative;overflow:auto">
-        <h1 style="margin:0 0 12px;font-size:20px;color:#fff">Git · control de versiones</h1>
-        <div class="card" style="max-width:980px;margin-bottom:14px;display:flex;align-items:flex-end;gap:10px">
-          <div style="flex:1">
-            <label class="label" for="git-remote-url">Remoto del repositorio (sólo https o ssh de github.com)</label>
-            <input id="git-remote-url" class="field mono" value="http://gitlab.com/ejemplo/repo" />
-          </div>
-          <button type="button" id="btn-validate-git-url" class="btn btn-primary">Verificar URL remota</button>
+        <div>
+          <label class="label">ruta</label>
+          <input id="topo-prop-ruta" class="field mono" readonly value="src/HELLO.bara"/>
         </div>
+        <div>
+          <label class="label">línea</label>
+          <input id="topo-prop-linea" class="field mono" readonly value="1"/>
+        </div>
+        <div>
+          <label class="label">tipo</label>
+          <input id="topo-prop-tipo" class="field" readonly value="archivo"/>
+        </div>
+        <div>
+          <label class="label">lenguaje</label>
+          <input id="topo-prop-lenguaje" class="field" readonly value="Bara"/>
+        </div>
+        <button class="btn btn-ghost" style="justify-content:center">Abrir en el editor</button>
+        <button class="btn btn-primary" style="justify-content:center">Actualizar grafo</button>
+      </div>
+    </main>`
+  },
+  "10": {
+    "id": "10",
+    "rail": "Herramientas",
+    "label": "10 · Git",
+    get html() {
+      return `<main class="main" style="padding:20px 28px;background:#08090a;position:relative">
+        <h1 style="margin:0 0 14px;font-size:22px;color:#fff">Git · control de versiones</h1>
         <div style="display:grid;grid-template-columns:1.1fr 0.9fr;gap:16px;max-width:980px">
           <div class="card">
             <div style="font-weight:600;margin-bottom:10px">Archivos cambiados</div>
             <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;">
-              <span class="mono" style="width:18px;color:var(--warn);font-weight:700">M</span>
-              <span class="mono" style="flex:1">${OPEN_FILE_PATH}</span>
+              <span class="mono" style="width:18px;color:#c9a227;font-weight:700">M</span>
+              <span class="mono" style="flex:1">src/HELLO.bara</span>
               <span class="check on">✓</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;">
+              <span class="mono" style="width:18px;color:#6aa96f;font-weight:700">A</span>
+              <span class="mono" style="flex:1">src/util.bara</span>
+              <span class="check on">✓</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:#2a1515">
+              <span class="mono" style="width:18px;color:#c9a227;font-weight:700">M</span>
+              <span class="mono" style="flex:1">.env</span>
+              <span class="chip-danger chip">secreto</span>
             </div>
             <div style="margin-top:10px;font-size:14px;color:var(--muted)">Se excluyen <span class="mono">.bara-backup/</span> y <span class="mono">.bara-trash/</span></div>
           </div>
-          <div class="card">
-            <label class="label">Mensaje del commit</label>
-            <textarea class="field" style="height:80px;resize:none">Actualiza contrato en ${OPEN_FILE_PATH}</textarea>
-            <button type="button" class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center">Confirmar commit</button>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="card">
+              <label class="label">Mensaje del commit</label>
+              <textarea class="field" style="height:80px;resize:none">Mejora saludo en HELLO.bara</textarea>
+              <button class="btn btn-primary" style="margin-top:10px;width:100%;justify-content:center">Preparar commit…</button>
+            </div>
+            <div class="card">
+              <label class="label" for="git-remote-url-input">URL remota (GitHub https / ssh)</label>
+              <div style="display:flex;gap:8px;align-items:center">
+                <input id="git-remote-url-input" class="field mono" value="${gitRemoteUrl}" aria-label="URL remota"/>
+                <button type="button" id="btn-verify-remote-url" class="btn btn-ghost" style="flex-shrink:0">Verificar URL remota</button>
+              </div>
+            </div>
           </div>
         </div>
-      </main>`;
-
-    case '12':
-      return `<main class="main" style="padding:20px 28px;background:#08090a;overflow:auto">
-        <h1 style="margin:0 0 12px;font-size:20px;color:var(--green-soft)">Registros</h1>
-        <div class="card" style="max-width:1000px;font-size:14px;line-height:1.55">
-          <div class="mono" style="padding:6px 0;border-bottom:1px solid rgba(30,42,56,.5)">
-            <span style="color:var(--muted)">10:31:02</span>
-            <span style="color:var(--green-soft);font-weight:600"> [INFO]</span>
-            <span> Archivo cargado: ${OPEN_FILE_PATH}</span>
-          </div>
-          <div class="mono" style="padding:6px 0;border-bottom:1px solid rgba(30,42,56,.5)">
-            <span style="color:var(--muted)">10:31:04</span>
-            <span style="color:var(--green-soft);font-weight:600"> [INFO]</span>
-            <span> Kernel activo · ${APP_VERSION}</span>
-          </div>
-          <div class="mono" style="padding:6px 0;border-bottom:1px solid rgba(30,42,56,.5)">
-            <span style="color:var(--muted)">10:31:40</span>
-            <span style="color:var(--warn);font-weight:600"> [AVISO]</span>
-            <span> TokenKind::Diagnostic: 3 diagnósticos en ${OPEN_FILE_PATH}</span>
-          </div>
-        </div>
-      </main>`;
-
-    case '13':
-      return buildSettingsScreenHtml();
-
-    case '15':
-      return `<main class="main" style="align-items:center;justify-content:center;background:#08090a;position:relative">
         <div class="modal-backdrop">
           <div class="modal">
-            <h2 style="margin:0 0 8px;font-size:18px">Tienes cambios sin guardar</h2>
-            <p style="margin:0 0 12px;color:var(--muted)">Guarda o descarta los cambios en <span class="mono">${OPEN_FILE_PATH}</span>.</p>
+            <h2 style="margin:0 0 8px;font-size:18px">Confirmar commit</h2>
+            <p style="margin:0 0 12px;color:var(--muted);font-size:14px">Se incluirán estos archivos:</p>
+            <div style="background:#0d1218;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:12px" class="mono">
+              <div>✓ src/HELLO.bara</div>
+              <div>✓ src/util.bara</div>
+            </div>
+            <div class="banner-warn" style="border:1px solid #6a4a20;border-radius:8px;padding:10px;margin-bottom:10px;font-size:14px;display:flex;align-items:center;gap:8px">
+              ${SVG.warn(18)} <span><span class="mono">.env</span> — Parece un secreto: no se incluirá salvo que lo marques.</span>
+            </div>
+            <div style="font-size:14px;color:var(--muted);margin-bottom:14px">Excluidos: .bara-backup/ · .bara-trash/</div>
             <div class="row" style="justify-content:flex-end">
-              <button type="button" class="btn btn-ghost" data-modal15="cancelar">Cancelar</button>
-              <button type="button" class="btn btn-danger" data-modal15="descartar">Descartar</button>
-              <button type="button" class="btn btn-primary" data-modal15="guardar">Guardar</button>
+              <button class="btn btn-ghost" id="git-modal-cancel">Cancelar</button>
+              <button class="btn btn-primary">Confirmar commit</button>
             </div>
           </div>
         </div>
       </main>`;
-
-    default:
-      return buildMainWorkspaceScreenHtml(bottomPanelOpen);
+    }
+  },
+  "11": {
+    "id": "11",
+    "rail": "Chat",
+    "label": "11 · Problemas (panel abierto)",
+    get html() {
+      return `${SIDEBAR_HTML}
+      <section class="main" style="border-right:1px solid var(--border)">
+        <div style="height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail);flex-shrink:0">
+          <strong style="font-size:15px">Chat</strong>
+          <button class="btn btn-ghost" style="padding:5px 10px">Ajustes</button>
+        </div>
+        <div style="height:28px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--border);background:#0d1218;font-size:14px;color:var(--muted);flex-shrink:0">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--green-soft)"></span>
+          <span class="mono" style="color:var(--text)">HELLO.bara</span>
+        </div>
+        <div style="flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px">
+          <div style="padding:8px 10px;background:rgba(17,24,33,.85);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--muted)">
+            <div style="color:var(--green-soft)">✓ Leí HELLO.bara</div>
+            <div style="color:var(--green-soft)">✓ Sin diagnósticos nuevos</div>
+            <div style="color:var(--green-soft)">✓ Confirmé firma</div>
+          </div>
+          <div style="align-self:flex-end;background:var(--hover);border:1px solid var(--border);padding:8px 12px;border-radius:12px;max-width:320px">¿Qué hace este código?</div>
+          <div style="align-self:flex-start;background:var(--panel);border:1px solid var(--border);padding:10px 12px;border-radius:12px;max-width:440px">
+            <p style="margin:0 0 6px">El archivo <span class="mono" style="color:var(--green-soft)">HELLO.bara</span> define el punto de entrada con <span class="mono">funcion main()</span>.</p>
+            <div class="mono" style="background:#08090a;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;color:var(--muted)">funcion main() {<br/>&nbsp;&nbsp;variables x = 10<br/>&nbsp;&nbsp;si x &gt; 5 { mostrar("Bara IDE") }<br/>}</div>
+          </div>
+          ${buildChatReviewCardHtml()}
+        </div>
+        ${COMPOSER_HTML}
+        ${buildBottomDockHtml()}
+      </section>
+      <aside class="editor-pane">
+        ${buildTabbar(true)}
+        ${buildEditorWithDiagnosticsHtml()}
+      </aside>`;
+    }
+  },
+  "12": {
+    "id": "12",
+    "rail": "Registros",
+    "label": "12 · Registros",
+    get html() {
+      return getScreen12Html();
+    }
+  },
+  "13": {
+    "id": "13",
+    "rail": "Ajustes",
+    "label": "13 · Ajustes",
+    get html() {
+      return getScreen13Html();
+    }
+  },
+  "14": {
+    "id": "14",
+    "rail": "Chat",
+    "label": "14 · Error sin clave",
+    "html": `${SIDEBAR_HTML}
+    <section class="main" style="border-right:1px solid var(--border)">
+      <div class="banner banner-error" role="status" style="justify-content:space-between">
+        <span>No hay clave configurada para DeepSeek. Abre Ajustes</span>
+        <div class="row">
+          <button class="btn btn-primary" style="padding:5px 12px">Ir a Ajustes</button>
+          <button type="button" id="banner-nokey-close" class="icon-close-btn" aria-label="Cerrar aviso de clave" title="Cerrar (Esc)">${SVG.close(16)}</button>
+        </div>
+      </div>
+      <div style="height:42px;display:flex;align-items:center;padding:0 14px;border-bottom:1px solid var(--border);background:var(--rail)"><strong>Chat</strong></div>
+      <div style="flex:1;padding:16px;color:var(--muted)">Escribe un mensaje cuando la clave esté configurada.</div>
+      ${COMPOSER_HTML}
+    </section>
+    <aside class="editor-pane">
+      ${buildTabbar(false)}
+      <div class="code">
+        <div class="gutter"><div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div></div>
+        <div class="code-body"><div>funcion main() {</div><div>  variables x = 10</div><div>  si x &gt; 5 {</div><div>    <span>mostrar("Bara IDE")</span></div><div>  }</div><div>}</div></div>
+      </div>
+    </aside>`
+  },
+  "15": {
+    "id": "15",
+    "rail": "Archivos",
+    "label": "15 · Archivos sin guardar",
+    "html": `<main class="main" style="align-items:center;justify-content:center;background:#08090a;position:relative">
+      <div style="opacity:.35;text-align:center;color:var(--muted)">
+        <div style="font-size:18px;margin-bottom:8px">Bienvenida · Archivos</div>
+        <div>Cambiar de carpeta…</div>
+      </div>
+      <div class="modal-backdrop">
+        <div class="modal">
+          <h2 style="margin:0 0 8px;font-size:18px">Tienes 2 archivos sin guardar</h2>
+          <p style="margin:0 0 12px;color:var(--muted)">Guarda o descarta los cambios antes de cambiar de carpeta.</p>
+          <div style="background:#0d1218;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:16px" class="mono">
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span class="dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green-soft)"></span>HELLO.bara</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 0"><span class="dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green-soft)"></span>genesis.bara</div>
+          </div>
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn btn-ghost" data-modal15="cancelar">Cancelar</button>
+            <button class="btn btn-danger" data-modal15="descartar">Descartar</button>
+            <button class="btn btn-primary" data-modal15="guardar">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </main>`
   }
-}
+};
 
-function getRailForScreen(screenId) {
-  const map = {
-    '01': 'Archivos',
-    '02': 'Buscar',
-    '03': 'Chat',
-    '04': 'Chat',
-    '05': 'Chat',
-    '06': 'Chat',
-    '07': 'Herramientas',
-    '08': 'Herramientas',
-    '09': 'Herramientas',
-    '10': 'Herramientas',
-    '11': 'Chat',
-    '12': 'Registros',
-    '13': 'Ajustes',
-    '14': 'Chat',
-    '15': 'Archivos'
-  };
-  return map[screenId] || 'Chat';
-}
+let currentScreenId = '01';
+let previousScreenId = '01';
+let bottomPanelOpen = false;
+let ephemeralToastTimer = null;
 
 function showEphemeralToast(message) {
   const viewport = document.getElementById('screen-viewport');
@@ -903,10 +1137,12 @@ function showEphemeralToast(message) {
   const toast = document.createElement('div');
   toast.id = 'bara-ephemeral-toast';
   toast.className = 'toast';
-  toast.setAttribute('role', 'status');
+  toast.style.bottom = '24px';
+  toast.style.left = '50%';
+  toast.style.transform = 'translateX(-50%)';
   toast.innerHTML = `
     <span>${message}</span>
-    <button type="button" class="icon-close-btn" aria-label="Cerrar notificación">×</button>
+    <button type="button" class="icon-close-btn" aria-label="Cerrar notificación">${SVG.close(16)}</button>
   `;
   const closeBtn = toast.querySelector('button');
   if (closeBtn) {
@@ -918,36 +1154,28 @@ function showEphemeralToast(message) {
   }, 3000);
 }
 
-/**
- * Portal Menu for » ("Más pestañas") in document.body (Point 2):
- * Opens UPWARD above the » button, never clipped by any container.
- * Closes on Esc or outside click and restores focus to #bp-more-tabs-btn.
- */
+// Portal Menu para » («Más pestañas») en document.body, posición fija abriendo hacia arriba
 function closeMoreTabsPortal(restoreFocus = false) {
-  state.moreTabsOpen = false;
+  moreTabsOpen = false;
   const existing = document.getElementById('more-tabs-portal');
-  if (existing) {
-    existing.remove();
-  }
+  if (existing) existing.remove();
   const btn = document.getElementById('bp-more-tabs-btn');
   if (btn) {
     btn.setAttribute('aria-expanded', 'false');
-    if (restoreFocus) {
-      btn.focus();
-    }
+    if (restoreFocus) btn.focus();
   }
 }
 
 function openMoreTabsPortal() {
-  if (!bottomPanelOpen) {
+  if (!bottomPanelOpen && currentScreenId !== '11') {
     bottomPanelOpen = true;
-    renderScreen('03');
+    renderScreen('11');
   }
   const btn = document.getElementById('bp-more-tabs-btn');
   if (!btn) return;
 
   closeMoreTabsPortal(false);
-  state.moreTabsOpen = true;
+  moreTabsOpen = true;
   btn.setAttribute('aria-expanded', 'true');
 
   const rect = btn.getBoundingClientRect();
@@ -957,15 +1185,21 @@ function openMoreTabsPortal() {
   portal.setAttribute('role', 'menu');
   portal.setAttribute('aria-label', 'Más pestañas');
 
-  const leftPos = Math.max(12, Math.min(rect.left, window.innerWidth - 234));
+  const leftPos = Math.max(12, Math.min(rect.left, window.innerWidth - 222));
   const bottomPos = Math.max(36, window.innerHeight - rect.top + 6);
   portal.style.left = `${leftPos}px`;
   portal.style.bottom = `${bottomPos}px`;
 
-  portal.innerHTML = MORE_TABS_ITEMS.map(item => `
+  const allMenuTabs = [
+    { id: 'problemas', label: 'Problemas' },
+    { id: 'registros', label: 'Registros' },
+    { id: 'terminal', label: 'Terminal kernel' },
+    ...MORE_TABS_ITEMS
+  ];
+
+  portal.innerHTML = allMenuTabs.map(item => `
     <button type="button" class="more-tabs-item" role="menuitem" data-more-tab="${item.id}">
       <span>${item.label}</span>
-      <span class="mono" style="font-size:12px;color:var(--muted)">↗</span>
     </button>
   `).join('');
 
@@ -975,80 +1209,115 @@ function openMoreTabsPortal() {
     menuBtn.onclick = (e) => {
       e.stopPropagation();
       const tabId = menuBtn.getAttribute('data-more-tab');
-      if (tabId) {
-        state.bottomDockTab = tabId;
-        closeMoreTabsPortal(true);
-        renderScreen(currentScreenId);
+      closeMoreTabsPortal(true);
+      const content = document.getElementById('bp-content');
+      if (!content) return;
+      if (tabId === 'problemas') {
+        content.innerHTML = buildProblemsTableHtml();
+        bindProblemRowEvents();
+      } else if (tabId === 'registros') {
+        document.getElementById('bp-tab-registros')?.click();
+      } else if (tabId === 'terminal') {
+        document.getElementById('bp-tab-terminal')?.click();
+      } else {
+        const found = MORE_TABS_ITEMS.find(i => i.id === tabId);
+        if (found) {
+          content.innerHTML = `<div style="padding:10px 14px;font-size:14px;color:var(--text)"><strong style="color:var(--green-soft)">${found.label}</strong> — ${found.description}</div>`;
+        }
       }
     };
   });
 
-  const firstItem = portal.querySelector('.more-tabs-item');
-  if (firstItem) {
-    firstItem.focus();
-  }
-}
-
-function toggleMoreTabsPortal() {
-  if (state.moreTabsOpen) {
-    closeMoreTabsPortal(true);
-  } else {
-    openMoreTabsPortal();
-  }
-}
-
-function syncHeaderAndStatusBar() {
-  const versionEl = document.getElementById('status-version-tag');
-  if (versionEl) versionEl.textContent = APP_VERSION;
-
-  const fileEl = document.getElementById('status-file-name');
-  if (fileEl) fileEl.textContent = OPEN_FILE_PATH;
-
-  const titleFileEl = document.getElementById('titlebar-file-label');
-  if (titleFileEl) titleFileEl.textContent = OPEN_FILE_PATH;
-
-  const diagCountEl = document.getElementById('status-diag-number');
-  if (diagCountEl) diagCountEl.textContent = String(BARA_DIAGNOSTICS.length);
-
-  const swapBtn = document.getElementById('btn-swap-layout');
-  const swapLabel = document.getElementById('swap-layout-label');
-  if (swapBtn && swapLabel) {
-    swapBtn.classList.toggle('active', state.editorFirst);
-    swapLabel.textContent = state.editorFirst ? 'Editor izq. ⇄' : 'Chat izq. ⇄';
-  }
-
-  const bannerEl = document.getElementById('github-url-error-banner');
-  if (bannerEl) {
-    bannerEl.hidden = !state.errorBannerVisible;
-    const textEl = bannerEl.querySelector('.banner-error-text');
-    if (textEl) textEl.textContent = ERROR_BANNER_TEXT;
-  }
-
-  // Sync hidden advanced components visibility if flag changes
-  const advContainers = document.querySelectorAll('[data-advanced], #adv-hidden-components');
-  advContainers.forEach(el => {
-    el.hidden = !state.showAdvanced;
-  });
+  const first = portal.querySelector('.more-tabs-item');
+  if (first) first.focus();
 }
 
 function toggleEditorFirstLayout() {
-  state.editorFirst = !state.editorFirst;
+  editorFirst = !editorFirst;
   try {
-    localStorage.setItem('editorFirst', String(state.editorFirst));
+    localStorage.setItem('editorFirst', String(editorFirst));
   } catch (_) {}
-  syncHeaderAndStatusBar();
-  const split = document.getElementById('workspace-split-container');
-  if (split) {
-    split.classList.toggle('editor-first', state.editorFirst);
-  } else {
-    renderScreen('03');
-  }
+  syncShellAdditions();
 }
 
 function setErrorBannerVisible(visible) {
-  state.errorBannerVisible = Boolean(visible);
-  syncHeaderAndStatusBar();
+  errorBannerVisible = Boolean(visible);
+  syncShellAdditions();
 }
+
+function dismissProblemById(probId) {
+  activeProblems = activeProblems.filter(p => p.id !== probId);
+  syncShellAdditions();
+  renderScreen(currentScreenId);
+}
+
+function resetProblems() {
+  activeProblems = INITIAL_PROBLEMS.map(p => ({ ...p }));
+  syncShellAdditions();
+  renderScreen(currentScreenId);
+}
+
+function syncShellAdditions() {
+  const shell = document.getElementById('app-shell');
+  if (shell) {
+    shell.classList.toggle('editor-first', editorFirst);
+  }
+  const swapBtn = document.getElementById('btn-swap-layout');
+  if (swapBtn) {
+    swapBtn.classList.toggle('active', editorFirst);
+  }
+  const banner = document.getElementById('github-url-error-banner');
+  if (banner) {
+    banner.hidden = !errorBannerVisible;
+    const span = banner.querySelector('span');
+    if (span) span.textContent = ERROR_BANNER_TEXT;
+  }
+  const verEl = document.getElementById('status-version-tag');
+  if (verEl) verEl.textContent = APP_VERSION;
+
+  // 2. CONTADORES COHERENTES: barra de estado, ⚠ N y pestaña Problemas usan el mismo origen de datos
+  const summary = computeProblemsSummary(activeProblems);
+  const probStatusEl = document.getElementById('status-problemas-trigger');
+  if (probStatusEl) {
+    probStatusEl.textContent = summary.statusText;
+  }
+  const diagCounterEl = document.getElementById('status-diag-counter');
+  if (diagCounterEl) {
+    diagCounterEl.textContent = summary.badgeText;
+  }
+  const bpTabProbEl = document.getElementById('bp-tab-problemas');
+  if (bpTabProbEl) {
+    bpTabProbEl.textContent = `Problemas (${summary.total})`;
+  }
+
+  // Componentes ocultos de VISUAL-4 (Belnap/Bilattice, AETHER, internos del kernel) presentes en el DOM con showAdvanced = false
+  const advContainer = document.getElementById('hidden-advanced-modules');
+  if (advContainer) {
+    advContainer.hidden = !showAdvanced;
+    if (!advContainer.innerHTML) {
+      advContainer.innerHTML = Object.values(HIDDEN_ADVANCED_COMPONENTS).map(c =>
+        `<section id="${c.id}" data-hidden-by-default="${c.hiddenByDefault}">${c.title || c.label}</section>`
+      ).join('');
+    }
+  }
+}
+
+window.BaraIDE = {
+  version: APP_VERSION,
+  topologyScope: 'proyecto',
+  constructorMode: 'blueprint',
+  jumpToLine(file, line) {
+    activeDiagLine = line;
+    renderScreen(bottomPanelOpen ? '11' : '03');
+  },
+  showToast: showEphemeralToast,
+  toggleEditorFirstLayout,
+  openMoreTabsPortal,
+  closeMoreTabsPortal,
+  setErrorBannerVisible,
+  dismissProblemById,
+  resetProblems
+};
 
 function bindKeyboardRoleButton(el, handler) {
   if (!el) return;
@@ -1092,12 +1361,23 @@ function updateTopologyScope(scope) {
   if (graphEl) {
     graphEl.innerHTML = data.svg;
   }
+  const first = data.nodes[0];
+  if (first) {
+    const r = document.getElementById('topo-prop-ruta');
+    const l = document.getElementById('topo-prop-linea');
+    const t = document.getElementById('topo-prop-tipo');
+    const g = document.getElementById('topo-prop-lenguaje');
+    if (r) r.value = first.path;
+    if (l) l.value = first.line;
+    if (t) t.value = first.kind;
+    if (g) g.value = first.lang;
+  }
 }
 
 function bindTopologyNodeClicks(scope) {
   const data = TOPOLOGY_SETS[scope] || TOPOLOGY_SETS.proyecto;
   document.querySelectorAll('.topology-node-item').forEach(item => {
-    bindKeyboardRoleButton(item, () => {
+    item.onclick = () => {
       const idx = parseInt(item.getAttribute('data-node-idx') || '0', 10);
       const node = data.nodes[idx];
       if (!node) return;
@@ -1113,7 +1393,7 @@ function bindTopologyNodeClicks(scope) {
       if (l) l.value = node.line;
       if (t) t.value = node.kind;
       if (g) g.value = node.lang;
-    });
+    };
   });
 }
 
@@ -1123,34 +1403,33 @@ function renderScreen(screenId) {
     previousScreenId = currentScreenId;
   }
   currentScreenId = screenId;
+  const screen = SCREENS[screenId] || SCREENS['01'];
 
-  if (screenId === '04') {
-    state.patchVerified = true;
-    state.patchStatus = 'pending';
-  } else if (screenId === '05') {
-    state.patchStatus = 'accepted';
-  } else if (screenId === '06') {
-    state.patchVerified = false;
-    state.patchStatus = 'pending';
-  } else if (screenId === '11') {
-    bottomPanelOpen = true;
-    state.bottomDockTab = 'problemas';
-  }
-
-  const railName = getRailForScreen(screenId);
   document.querySelectorAll('.rail a').forEach(a => {
-    if (a.getAttribute('data-rail') === railName) {
+    if (a.getAttribute('data-rail') === screen.rail) {
       a.classList.add('active');
     } else {
       a.classList.remove('active');
     }
   });
 
-  syncHeaderAndStatusBar();
+  const labelEl = document.getElementById('demo-active-label');
+  if (labelEl) labelEl.textContent = screen.label;
+
+  document.querySelectorAll('.demo-option').forEach(opt => {
+    if (opt.getAttribute('data-id') === screenId) {
+      opt.classList.add('selected');
+    } else {
+      opt.classList.remove('selected');
+    }
+  });
 
   const viewport = document.getElementById('screen-viewport');
   if (viewport) {
-    viewport.innerHTML = buildScreenHtml(screenId);
+    bottomPanelOpen = (screenId === '11');
+    const html = screen.html;
+    viewport.innerHTML = html;
+    syncShellAdditions();
     bindScreenInteractions();
   }
 }
@@ -1158,218 +1437,307 @@ function renderScreen(screenId) {
 function toggleBottomPanel() {
   closeMoreTabsPortal(false);
   bottomPanelOpen = !bottomPanelOpen;
-  if (currentScreenId !== '03' && currentScreenId !== '11') {
-    renderScreen('03');
+  if (bottomPanelOpen) {
+    renderScreen('11');
   } else {
-    renderScreen(currentScreenId);
+    if (currentScreenId === '11') {
+      renderScreen('03');
+    } else {
+      renderScreen(currentScreenId);
+    }
   }
 }
 
 function bindProblemRowEvents() {
+  document.querySelectorAll('.btn-dismiss-problem').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const probId = btn.getAttribute('data-dismiss-problem');
+      if (probId) dismissProblemById(probId);
+    };
+  });
   document.querySelectorAll('.problem-row').forEach(row => {
-    const line = parseInt(row.getAttribute('data-line') || '2', 10);
-    bindKeyboardRoleButton(row, () => {
-      state.activeDiagnosticLine = line;
-      renderScreen('03');
-      const lineEl = document.querySelector(`.code-line[data-line-num="${line}"]`);
-      if (lineEl && typeof lineEl.scrollIntoView === 'function') {
-        lineEl.scrollIntoView({ block: 'nearest' });
-      }
+    const file = row.getAttribute('data-file') || 'HELLO.bara';
+    const line = parseInt(row.getAttribute('data-line') || '1', 10);
+    bindKeyboardRoleButton(row, (e) => {
+      if (e.target && e.target.closest('.btn-dismiss-problem')) return;
+      window.BaraIDE.jumpToLine(file, line);
     });
   });
-
   document.querySelectorAll('.diag-token').forEach(tok => {
-    const line = parseInt(tok.getAttribute('data-diag-line') || '2', 10);
+    const line = parseInt(tok.getAttribute('data-diag-line') || '4', 10);
     bindKeyboardRoleButton(tok, () => {
-      state.activeDiagnosticLine = line;
-      renderScreen('03');
+      activeDiagLine = line;
+      renderScreen(currentScreenId);
     });
   });
 }
 
 function bindScreenInteractions() {
-  // Patch Review Card controls (Point 4)
-  const toggleVerBtn = document.getElementById('btn-toggle-verified-demo');
-  if (toggleVerBtn) {
-    toggleVerBtn.onclick = () => {
-      state.patchVerified = !state.patchVerified;
-      state.patchStatus = 'pending';
+  // Auto-Apply checkbox (desmarcado por defecto, clicable)
+  const autoApplyCheck = document.getElementById('auto-apply-checkbox');
+  if (autoApplyCheck) {
+    autoApplyCheck.parentElement.onclick = (e) => {
+      e.preventDefault();
+      const isOn = autoApplyCheck.classList.toggle('on');
+      autoApplyCheck.textContent = isOn ? '✓' : '';
+    };
+  }
+
+  // 1. Tarjeta de revisión en el Chat: alternar Verificado / No verificado, Aceptar, Rechazar, Deshacer
+  const reviewPill = document.getElementById('review-card-status-pill');
+  if (reviewPill) {
+    bindKeyboardRoleButton(reviewPill, () => {
+      reviewCardVerified = !reviewCardVerified;
+      renderScreen(currentScreenId);
+    });
+  }
+  const unvAccept = document.getElementById('btn-unverified-accept');
+  if (unvAccept) {
+    unvAccept.onclick = () => {
+      if (!reviewCardVerified && strictMode) return;
+      unverifiedAccepted = true;
       renderScreen(currentScreenId);
     };
   }
-  const acceptBtn = document.getElementById('btn-patch-accept');
-  if (acceptBtn) {
-    acceptBtn.onclick = () => {
-      const check = computeAcceptButtonState({
-        patchVerified: state.patchVerified,
-        strictMode: state.strictMode
-      });
-      if (check.disabled) return;
-      state.patchStatus = 'accepted';
+  const unvReject = document.getElementById('btn-unverified-reject');
+  if (unvReject) {
+    unvReject.onclick = () => {
+      unverifiedAccepted = false;
+      showEphemeralToast('Cambio rechazado');
       renderScreen(currentScreenId);
     };
   }
-  const rejectBtn = document.getElementById('btn-patch-reject');
-  if (rejectBtn) {
-    rejectBtn.onclick = () => {
-      state.patchStatus = 'rejected';
-      renderScreen(currentScreenId);
-    };
-  }
-  const undoBtn = document.getElementById('btn-patch-undo');
-  if (undoBtn) {
-    undoBtn.onclick = () => {
-      state.patchStatus = 'pending';
-      renderScreen(currentScreenId);
-    };
-  }
-  const restoreBtn = document.getElementById('btn-patch-restore');
-  if (restoreBtn) {
-    restoreBtn.onclick = () => {
-      state.patchStatus = 'pending';
+  const unvUndo = document.getElementById('btn-unverified-undo');
+  if (unvUndo) {
+    unvUndo.onclick = () => {
+      unverifiedAccepted = false;
       renderScreen(currentScreenId);
     };
   }
 
-  // Bottom dock controls & » portal trigger (Point 2 & Point 6)
+  // 7. Botón » («Más pestañas») en el panel inferior
   const moreTabsBtn = document.getElementById('bp-more-tabs-btn');
   if (moreTabsBtn) {
     moreTabsBtn.onclick = (e) => {
       e.stopPropagation();
-      toggleMoreTabsPortal();
+      if (moreTabsOpen) closeMoreTabsPortal(true);
+      else openMoreTabsPortal();
     };
   }
+
+  // 3. Ajustes (13): Modo estricto, Autoguardado, Recordar clave, Carpeta de confianza, Proveedor
+  const strictBtn = document.getElementById('toggle-strict-mode');
+  if (strictBtn) {
+    strictBtn.onclick = () => {
+      strictMode = !strictMode;
+      try { localStorage.setItem('strictMode', String(strictMode)); } catch (_) {}
+      renderScreen('13');
+    };
+  }
+  const autosaveBtn = document.getElementById('toggle-autosave');
+  if (autosaveBtn) {
+    autosaveBtn.onclick = () => {
+      autosave = !autosave;
+      try { localStorage.setItem('autosave', String(autosave)); } catch (_) {}
+      renderScreen('13');
+    };
+  }
+  const rememberLabel = document.getElementById('label-remember-key');
+  if (rememberLabel) {
+    rememberLabel.onclick = (e) => {
+      e.preventDefault();
+      rememberKey = !rememberKey;
+      renderScreen('13');
+    };
+  }
+  const changeFolderBtn = document.getElementById('btn-change-trusted-folder');
+  if (changeFolderBtn) {
+    changeFolderBtn.onclick = () => {
+      trustedFolder = trustedFolder === DEFAULT_TRUSTED_FOLDER
+        ? 'C:/Users/Vexor/proyectos/genesis_engine'
+        : DEFAULT_TRUSTED_FOLDER;
+      renderScreen('13');
+      showEphemeralToast(`Carpeta de confianza: ${trustedFolder}`);
+    };
+  }
+  const provSelect = document.getElementById('settings-provider-select');
+  if (provSelect) {
+    provSelect.onchange = (e) => {
+      aiProvider = e.target.value;
+      renderScreen('13');
+    };
+  }
+
+  // 4. Git (10): Verificar URL remota dispara el banner si no es de GitHub
+  const verifyRemoteBtn = document.getElementById('btn-verify-remote-url');
+  const remoteInput = document.getElementById('git-remote-url-input');
+  if (verifyRemoteBtn && remoteInput) {
+    verifyRemoteBtn.onclick = () => {
+      gitRemoteUrl = remoteInput.value;
+      const check = validateGithubUrl(gitRemoteUrl);
+      if (!check.valid) {
+        setErrorBannerVisible(true);
+      } else {
+        setErrorBannerVisible(false);
+        showEphemeralToast('URL remota de GitHub verificada ✓');
+      }
+    };
+  }
+
+  // Toast 05: Deshacer and Close (×)
+  const deshacerBtn = document.getElementById('toast-deshacer-btn');
+  if (deshacerBtn) {
+    deshacerBtn.onclick = () => {
+      unverifiedAccepted = false;
+      renderScreen('03');
+    };
+  }
+  const toastClose = document.getElementById('toast-close-btn');
+  if (toastClose) {
+    toastClose.onclick = () => {
+      const t = document.getElementById('toast-05');
+      if (t) t.style.display = 'none';
+    };
+  }
+
+  // Banner 14: Close (×) returns to 03
+  const bannerClose = document.getElementById('banner-nokey-close');
+  if (bannerClose) {
+    bannerClose.onclick = () => renderScreen('03');
+  }
+
+  // Bottom dock controls
   const bpMin = document.getElementById('bp-btn-minimize');
-  if (bpMin) bpMin.onclick = () => toggleBottomPanel();
+  if (bpMin) {
+    bpMin.onclick = () => toggleBottomPanel();
+  }
   const bpClose = document.getElementById('bp-btn-close');
-  if (bpClose) bpClose.onclick = () => toggleBottomPanel();
+  if (bpClose) {
+    bpClose.onclick = () => toggleBottomPanel();
+  }
   const bpMax = document.getElementById('bp-btn-maximize');
   if (bpMax) {
     bpMax.onclick = () => {
       const dock = document.getElementById('bottom-dock');
       if (dock) {
-        dock.style.height = dock.style.height === '260px' ? '175px' : '260px';
+        dock.style.height = dock.style.height === '340px' ? '210px' : '340px';
       }
     };
   }
 
+  // Bottom dock tabs & Problem rows
+  bindProblemRowEvents();
+
   ['problemas', 'registros', 'terminal'].forEach(tabName => {
     const tabEl = document.getElementById(`bp-tab-${tabName}`);
     if (tabEl) {
-      tabEl.onclick = () => {
-        state.bottomDockTab = tabName;
-        renderScreen(currentScreenId);
-      };
+      bindKeyboardRoleButton(tabEl, () => {
+        document.querySelectorAll('.bp-tab').forEach(t => {
+          t.style.background = 'transparent';
+          t.style.color = 'var(--muted)';
+          t.style.fontWeight = 'normal';
+        });
+        tabEl.style.background = 'var(--hover)';
+        tabEl.style.color = '#fff';
+        tabEl.style.fontWeight = '600';
+
+        const content = document.getElementById('bp-content');
+        if (content) {
+          if (tabName === 'problemas') {
+            content.innerHTML = buildProblemsTableHtml();
+            bindProblemRowEvents();
+          } else if (tabName === 'registros') {
+            const logRows = getActiveRegistros().map(r =>
+              `<div><span style="color:var(--muted)">${r.time}</span> <span style="color:${r.color};font-weight:600">[${r.level}]</span> ${r.text}</div>`
+            ).join('');
+            content.innerHTML = `<div style="padding:10px 14px;font-family:var(--mono);font-size:14px;line-height:1.6;color:var(--text);">${logRows}</div>`;
+          } else if (tabName === 'terminal') {
+            content.innerHTML = `
+              <div style="padding:10px 14px;font-family:var(--mono);font-size:14px;line-height:1.6;color:var(--text);">
+                <span style="color:var(--green-soft)">bara-kernel$</span> ./bara --version<br/>
+                Bara IDE<br/>
+                <span style="color:var(--green-soft)">bara-kernel$</span> _
+              </div>
+            `;
+          }
+        }
+      });
     }
   });
 
-  bindProblemRowEvents();
-
-  // Welcome cards
-  document.querySelectorAll('.welcome-card, .recent-project-item').forEach(el => {
-    bindKeyboardRoleButton(el, () => renderScreen('03'));
+  // Screen 01 cards & recent projects
+  document.querySelectorAll('.card[role="button"], .recent-project-item').forEach(el => {
+    if (!el.classList.contains('tool-card')) {
+      bindKeyboardRoleButton(el, () => renderScreen('03'));
+    }
   });
 
-  // Herramientas cards
+  // Herramientas 07 cards
   document.querySelectorAll('.tool-card').forEach(card => {
-    const target = card.getAttribute('data-tool');
-    if (target) {
-      bindKeyboardRoleButton(card, () => renderScreen(target));
-    }
+    const toolTarget = card.getAttribute('data-tool');
+    bindKeyboardRoleButton(card, () => {
+      if (toolTarget === 'asistencia') {
+        showEphemeralToast('Se abre en ventana aparte');
+      } else if (toolTarget) {
+        renderScreen(toolTarget);
+      }
+    });
   });
 
-  // Search rows
-  document.querySelectorAll('.search-row').forEach(row => {
-    const target = row.getAttribute('data-target');
-    if (target) {
-      bindKeyboardRoleButton(row, () => renderScreen(target));
-    }
-  });
-
-  // Ajustes controls (Point 7)
-  const strictToggle = document.getElementById('toggle-strict-mode');
-  if (strictToggle) {
-    strictToggle.onclick = () => {
-      state.strictMode = !state.strictMode;
-      try {
-        localStorage.setItem('strictMode', String(state.strictMode));
-      } catch (_) {}
-      renderScreen('13');
-    };
-  }
-  const autosaveToggle = document.getElementById('toggle-autosave');
-  if (autosaveToggle) {
-    autosaveToggle.onclick = () => {
-      state.autoSave = !state.autoSave;
-      renderScreen('13');
-    };
-  }
-  const providerSelect = document.getElementById('settings-provider-select');
-  if (providerSelect) {
-    providerSelect.onchange = (e) => {
-      state.aiProvider = e.target.value;
-      renderScreen('13');
-    };
-  }
-  const closeAjustesBtn = document.getElementById('btn-close-ajustes');
-  if (closeAjustesBtn) {
-    closeAjustesBtn.onclick = () => renderScreen('03');
-  }
-  const saveSettingsBtn = document.getElementById('btn-save-settings');
-  if (saveSettingsBtn) {
-    saveSettingsBtn.onclick = () => showEphemeralToast('Preferencias guardadas');
-  }
-  const goUnverifiedBtn = document.getElementById('btn-go-unverified-from-settings');
-  if (goUnverifiedBtn) {
-    goUnverifiedBtn.onclick = () => {
-      state.patchVerified = false;
-      state.patchStatus = 'pending';
-      renderScreen('03');
-    };
-  }
-  const openAjustesChatBtn = document.getElementById('chat-btn-open-ajustes');
-  if (openAjustesChatBtn) {
-    openAjustesChatBtn.onclick = () => renderScreen('13');
-  }
-
-  // Git URL validation trigger (Point 5)
-  const validateGitBtn = document.getElementById('btn-validate-git-url');
-  if (validateGitBtn) {
-    validateGitBtn.onclick = () => {
-      const input = document.getElementById('git-remote-url');
-      const res = validateGithubUrl(input ? input.value : '');
-      setErrorBannerVisible(!res.valid);
-    };
-  }
-
-  // Topología scope selector
-  const segProy = document.getElementById('topology-seg-proyecto');
-  const segBara = document.getElementById('topology-seg-bara');
-  if (segProy && segBara) {
-    bindKeyboardRoleButton(segProy, () => updateTopologyScope('proyecto'));
-    bindKeyboardRoleButton(segBara, () => updateTopologyScope('bara'));
-    bindTopologyNodeClicks(window.BaraIDE.topologyScope || 'proyecto');
-  }
-
-  // Constructor 08 buttons
+  // Generic Buttons
   document.querySelectorAll('button').forEach(btn => {
     if (btn.hasAttribute('data-modal15')) {
       btn.onclick = () => renderScreen('01');
       return;
     }
+    if (
+      btn.id === 'btn-unverified-accept' ||
+      btn.id === 'btn-unverified-reject' ||
+      btn.id === 'btn-unverified-undo' ||
+      btn.id === 'btn-verify-remote-url' ||
+      btn.id === 'btn-change-trusted-folder' ||
+      btn.classList.contains('btn-dismiss-problem')
+    ) {
+      return;
+    }
     const t = (btn.textContent || '').trim();
     if (t === 'Nuevo chat') btn.onclick = () => renderScreen('03');
-    if (t === 'Abrir en el editor') btn.onclick = () => renderScreen('03');
-    if (t === 'Traducir y firmar') {
+    if (t === 'Aceptar' || t === 'Aceptar cambio' || t === 'Aceptar de todos modos') {
       btn.onclick = () => {
-        document.querySelectorAll('label.row .check').forEach(c => {
-          c.classList.add('on');
-          c.textContent = '✓';
-        });
+        if (currentScreenId === '06' && strictMode) return;
+        unverifiedAccepted = true;
+        renderScreen('05');
       };
     }
+    if (t === 'Rechazar') btn.onclick = () => renderScreen('03');
+    if (t === 'Deshacer') btn.onclick = () => renderScreen('03');
+    if (t === 'Ir a Ajustes' || (t === 'Ajustes' && currentScreenId !== '13')) {
+      btn.onclick = () => renderScreen('13');
+    }
+    if (t === 'Abrir en el editor') btn.onclick = () => renderScreen('03');
+    if (t === 'Cancelar') {
+      btn.onclick = () => {
+        document.querySelectorAll('.modal-backdrop').forEach(m => m.style.display = 'none');
+      };
+    }
+    if (t === 'Confirmar commit') {
+      btn.onclick = () => {
+        document.querySelectorAll('.modal-backdrop').forEach(m => m.style.display = 'none');
+        showEphemeralToast('Commit confirmado');
+      };
+    }
+    if (t === 'Preparar commit…') {
+      btn.onclick = () => {
+        document.querySelectorAll('.modal-backdrop').forEach(m => m.style.display = 'flex');
+      };
+    }
+
+    // Constructor 08 buttons
     if (t === 'Ejemplo') {
       btn.onclick = () => {
+        const asideTitle = document.querySelector('#constructor-blueprint-aside > div');
+        if (asideTitle) asideTitle.textContent = 'Blueprint JSON';
         const g = document.getElementById('constructor-blueprint-gutter');
         const b = document.getElementById('constructor-blueprint-code');
         if (g && b) {
@@ -1378,18 +1746,28 @@ function bindScreenInteractions() {
         }
       };
     }
+    if (t === 'Traducir y firmar') {
+      btn.onclick = () => {
+        document.querySelectorAll('label.row .check').forEach(c => {
+          c.classList.add('on');
+          c.textContent = '✓';
+        });
+      };
+    }
     if (t.includes('Emitir .bara')) {
       btn.onclick = () => {
         const asideTitle = document.querySelector('#constructor-blueprint-aside > div');
-        if (asideTitle) asideTitle.textContent = `Código ${OPEN_FILE_PATH}`;
+        if (asideTitle) asideTitle.textContent = 'Código HELLO.bara';
         const g = document.getElementById('constructor-blueprint-gutter');
         const b = document.getElementById('constructor-blueprint-code');
         const baraLines = [
-          `<span class="kw">raiz</span> @ktb ContratoGenesis {`,
-          `  <span class="kw">funcion</span> iniciar() {`,
-          `    mostrar(<span class="str">"kernel activo"</span>)`,
-          `  }`,
-          `}`
+          '<span style="color:#8fb89a">funcion</span> main() {',
+          '  variables x = 10',
+          '  <span style="color:#8fb89a">si</span> x &gt; 5 {',
+          '    mostrar("Bara IDE")',
+          '    registrar("ok")',
+          '  }',
+          '}'
         ];
         if (g && b) {
           const rendered = renderBlueprintLines(baraLines);
@@ -1400,6 +1778,24 @@ function bindScreenInteractions() {
     }
   });
 
+  // Topología scope selector (Proyecto | Bara)
+  const segProy = document.getElementById('topology-seg-proyecto');
+  const segBara = document.getElementById('topology-seg-bara');
+  if (segProy && segBara) {
+    bindKeyboardRoleButton(segProy, () => updateTopologyScope('proyecto'));
+    bindKeyboardRoleButton(segBara, () => updateTopologyScope('bara'));
+    bindTopologyNodeClicks(window.BaraIDE.topologyScope || 'proyecto');
+  }
+
+  // Command rows in Buscar (Screen 02)
+  document.querySelectorAll('.search-row').forEach(row => {
+    const target = row.getAttribute('data-target');
+    if (target) {
+      bindKeyboardRoleButton(row, () => renderScreen(target));
+    }
+  });
+
+  // Close tab button in editor
   document.querySelectorAll('.tab .x').forEach(x => {
     x.onclick = (e) => {
       e.stopPropagation();
@@ -1408,146 +1804,50 @@ function bindScreenInteractions() {
   });
 }
 
-/**
- * Triggers a specific BARA-VISUAL-5 state for /demo and automated verification.
- */
-function triggerDemoState(action) {
-  closeMoreTabsPortal(false);
-  state.errorBannerVisible = (action === 'banner-error');
-  document.querySelectorAll('.demo-trigger-btn').forEach(b => {
-    b.classList.toggle('active', b.getAttribute('data-demo-action') === action);
-  });
-
-  switch (action) {
-    case 'layout-normal':
-      state.editorFirst = false;
-      try { localStorage.setItem('editorFirst', 'false'); } catch (_) {}
-      bottomPanelOpen = true;
-      renderScreen('03');
-      break;
-
-    case 'layout-invertido':
-      state.editorFirst = true;
-      try { localStorage.setItem('editorFirst', 'true'); } catch (_) {}
-      bottomPanelOpen = true;
-      renderScreen('03');
-      break;
-
-    case 'menu-mas-abierto':
-      bottomPanelOpen = true;
-      renderScreen('03');
-      openMoreTabsPortal();
-      break;
-
-    case 'aviso-rojo':
-      state.editorFirst = false;
-      try { localStorage.setItem('editorFirst', 'false'); } catch (_) {}
-      state.patchVerified = false;
-      state.patchStatus = 'pending';
-      bottomPanelOpen = true;
-      renderScreen('03');
-      break;
-
-    case 'verificado':
-      state.patchVerified = true;
-      state.patchStatus = 'pending';
-      bottomPanelOpen = true;
-      renderScreen('03');
-      break;
-
-    case 'banner-error':
-      state.errorBannerVisible = true;
-      bottomPanelOpen = true;
-      renderScreen('03');
-      break;
-
-    case 'diagnosticos':
-      state.activeDiagnosticLine = 2;
-      state.bottomDockTab = 'problemas';
-      bottomPanelOpen = true;
-      renderScreen('03');
-      break;
-
-    case 'modo-estricto':
-      state.strictMode = true;
-      state.patchVerified = false;
-      state.patchStatus = 'pending';
-      try { localStorage.setItem('strictMode', 'true'); } catch (_) {}
-      renderScreen('13');
-      break;
-
-    default:
-      renderScreen('03');
-  }
-}
-
-window.BaraIDE = {
-  version: APP_VERSION,
-  openFile: OPEN_FILE_PATH,
-  state,
-  topologyScope: 'proyecto',
-  renderScreen,
-  triggerDemoState,
-  toggleEditorFirstLayout,
-  openMoreTabsPortal,
-  closeMoreTabsPortal,
-  setErrorBannerVisible,
-  jumpToLine(file, line) {
-    state.activeDiagnosticLine = line;
-    renderScreen('03');
-  },
-  showToast: showEphemeralToast
-};
-
 window.renderScreen = renderScreen;
-window.triggerDemoState = triggerDemoState;
-window.setErrorBannerVisible = setErrorBannerVisible;
 window.updateTopologyScope = updateTopologyScope;
+window.setErrorBannerVisible = setErrorBannerVisible;
+window.toggleEditorFirstLayout = toggleEditorFirstLayout;
+window.openMoreTabsPortal = openMoreTabsPortal;
+window.closeMoreTabsPortal = closeMoreTabsPortal;
+window.setStrictMode = (val) => {
+  strictMode = Boolean(val);
+  try { localStorage.setItem('strictMode', String(strictMode)); } catch (_) {}
+  renderScreen(currentScreenId);
+};
+window.setActiveDiagLine = (line) => {
+  activeDiagLine = line;
+  renderScreen(currentScreenId);
+};
+window.dismissProblemById = dismissProblemById;
+window.resetProblems = resetProblems;
 
 document.addEventListener('DOMContentLoaded', () => {
-  syncHeaderAndStatusBar();
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('demo') === '1' || window.location.pathname.includes('demo')) {
+    document.getElementById('demo-switcher')?.classList.add('visible');
+  }
 
-  // Titlebar buttons
+  // Botón ⇄ en barra de título
   const swapBtn = document.getElementById('btn-swap-layout');
   if (swapBtn) {
     swapBtn.onclick = () => toggleEditorFirstLayout();
   }
 
-  const demoBar = document.getElementById('demo-state-bar');
-  const toggleDemoBtn = document.getElementById('btn-toggle-demo-bar');
-  if (toggleDemoBtn && demoBar) {
-    toggleDemoBtn.onclick = () => {
-      demoBar.hidden = !demoBar.hidden;
-      toggleDemoBtn.classList.toggle('active', !demoBar.hidden);
-    };
-  }
-
-  // Window controls feedback
+  // Controles de ventana ▬ □ ×
   ['win-btn-min', 'win-btn-max', 'win-btn-close'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (btn) {
-      btn.onclick = () => {
-        const actionLabel = id === 'win-btn-min' ? 'Ventana minimizada (mock)' : id === 'win-btn-max' ? 'Ventana maximizada (mock)' : 'Cerrar ventana (mock)';
-        showEphemeralToast(actionLabel);
-      };
+    const b = document.getElementById(id);
+    if (b) {
+      b.onclick = () => showEphemeralToast('Control de ventana');
     }
   });
 
-  // Error banner × button (Point 5)
-  const closeBannerBtn = document.getElementById('btn-close-error-banner');
-  if (closeBannerBtn) {
-    closeBannerBtn.onclick = () => setErrorBannerVisible(false);
+  // Cerrar banner de error con ×
+  const errClose = document.getElementById('btn-close-error-banner');
+  if (errClose) {
+    errClose.onclick = () => setErrorBannerVisible(false);
   }
 
-  // /demo bar action buttons
-  document.querySelectorAll('.demo-trigger-btn').forEach(btn => {
-    btn.onclick = () => {
-      const action = btn.getAttribute('data-demo-action');
-      if (action) triggerDemoState(action);
-    };
-  });
-
-  // Rail navigation
   document.querySelectorAll('.rail a').forEach(a => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1556,26 +1856,46 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Status bar diagnostics trigger
   const probTrigger = document.getElementById('status-problemas-trigger');
   if (probTrigger) {
-    probTrigger.onclick = () => {
-      state.bottomDockTab = 'problemas';
-      toggleBottomPanel();
-    };
+    bindKeyboardRoleButton(probTrigger, toggleBottomPanel);
+  }
+  const diagTrigger = document.getElementById('status-diag-counter');
+  if (diagTrigger) {
+    bindKeyboardRoleButton(diagTrigger, () => {
+      activeDiagLine = 4;
+      bottomPanelOpen = true;
+      renderScreen('11');
+    });
   }
 
-  // Close » portal on outside click
-  document.addEventListener('click', (e) => {
-    if (!state.moreTabsOpen) return;
-    const portal = document.getElementById('more-tabs-portal');
-    const btn = document.getElementById('bp-more-tabs-btn');
-    if (portal && !portal.contains(e.target) && (!btn || !btn.contains(e.target))) {
-      closeMoreTabsPortal(true);
-    }
-  });
+  const demoMenu = document.getElementById('demo-menu');
+  const demoBtn = document.getElementById('demo-switcher-btn');
+  if (demoMenu && demoBtn) {
+    demoMenu.innerHTML = Object.values(SCREENS).map(s => `
+      <div class="demo-option ${s.id === currentScreenId ? 'selected' : ''}" data-id="${s.id}" onclick="renderScreen('${s.id}'); document.getElementById('demo-menu').classList.remove('open');">
+        <span>${s.label}</span>
+        <span class="mono" style="font-size:11px;color:var(--muted);">${s.id}</span>
+      </div>
+    `).join('');
 
-  // Keyboard shortcuts: Ctrl+Alt+E (swap layout), Ctrl+J (bottom panel), Esc (close menus/panels)
+    demoBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      demoMenu.classList.toggle('open');
+    });
+
+    document.addEventListener('click', (e) => {
+      demoMenu.classList.remove('open');
+      if (moreTabsOpen) {
+        const portal = document.getElementById('more-tabs-portal');
+        const mBtn = document.getElementById('bp-more-tabs-btn');
+        if (portal && !portal.contains(e.target) && (!mBtn || !mBtn.contains(e.target))) {
+          closeMoreTabsPortal(true);
+        }
+      }
+    });
+  }
+
   window.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.altKey && (e.key === 'e' || e.key === 'E')) {
       e.preventDefault();
@@ -1608,12 +1928,12 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (e.key === 'Escape') {
-      if (state.moreTabsOpen) {
+      if (moreTabsOpen) {
         e.preventDefault();
         closeMoreTabsPortal(true);
         return;
       }
-      if (state.errorBannerVisible) {
+      if (errorBannerVisible) {
         e.preventDefault();
         setErrorBannerVisible(false);
         return;
@@ -1621,39 +1941,34 @@ document.addEventListener('DOMContentLoaded', () => {
       const ephToast = document.getElementById('bara-ephemeral-toast');
       if (ephToast) {
         ephToast.remove();
+      }
+      const toast05 = document.getElementById('toast-05');
+      if (toast05 && toast05.style.display !== 'none') {
+        toast05.style.display = 'none';
         return;
       }
-      if (currentScreenId === '13' || currentScreenId === '02') {
+      if (currentScreenId === '02' || currentScreenId === '13') {
+        renderScreen(previousScreenId || '01');
+        return;
+      }
+      if (currentScreenId === '14') {
         renderScreen('03');
         return;
       }
       document.querySelectorAll('.modal-backdrop').forEach(m => m.style.display = 'none');
+      document.getElementById('demo-menu')?.classList.remove('open');
     }
   });
 
   const path = window.location.pathname;
-  const urlParams = new URLSearchParams(window.location.search);
-  if (path.includes('demo') || urlParams.get('demo') === '1') {
-    if (demoBar) demoBar.hidden = false;
-    if (toggleDemoBtn) toggleDemoBtn.classList.add('active');
-    renderScreen('03');
-  } else if (path.includes('buscar')) {
-    renderScreen('02');
-  } else if (path.includes('constructor')) {
-    renderScreen('08');
-  } else if (path.includes('topologia')) {
-    renderScreen('09');
-  } else if (path.includes('git')) {
-    renderScreen('10');
-  } else if (path.includes('registros') || path.includes('logs')) {
-    renderScreen('12');
-  } else if (path.includes('ajustes')) {
-    renderScreen('13');
-  } else if (path.includes('herramientas')) {
-    renderScreen('07');
-  } else if (path.includes('bienvenida')) {
-    renderScreen('01');
-  } else {
-    renderScreen('03');
-  }
+  if (path.includes('buscar')) renderScreen('02');
+  else if (path.includes('chat') || path.includes('asistente') || path.includes('editor')) renderScreen('03');
+  else if (path.includes('constructor')) renderScreen('08');
+  else if (path.includes('topologia')) renderScreen('09');
+  else if (path.includes('git')) renderScreen('10');
+  else if (path.includes('registros') || path.includes('logs')) renderScreen('12');
+  else if (path.includes('ajustes')) renderScreen('13');
+  else if (path.includes('herramientas')) renderScreen('07');
+  else if (path.includes('problemas')) renderScreen('11');
+  else renderScreen('01');
 });

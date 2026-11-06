@@ -3,6 +3,7 @@
  * Pure logic module for BARA-VISUAL-5:
  * - Version & file constants
  * - Hidden advanced components config (showAdvanced = false)
+ * - Coherent single source of truth for Problems & counters
  * - TokenKind::Diagnostic tokenizer & validators (3-consonant root, number, unclosed string)
  * - Strict mode gating for unverified changes
  * - GitHub URL validation for error banner
@@ -49,6 +50,53 @@ export const MORE_TABS_ITEMS = [
   { id: 'lienzo', label: 'Lienzo', description: 'Vista rápida de nodos fuente → transformar → guardia → sumidero' },
   { id: 'nucleo', label: 'Núcleo', description: 'Estado interno del verificador formal Bara v0.5.0' }
 ];
+
+/**
+ * Single source of truth for IDE problems (barra de estado, contador ⚠ N y panel Problemas).
+ */
+export const INITIAL_PROBLEMS = [
+  {
+    id: 'prob-1',
+    file: 'HELLO.bara',
+    line: 4,
+    col: 5,
+    location: 'HELLO.bara:4:5',
+    message: "Identificador 'mostrar' — aviso de firma",
+    severity: 'aviso'
+  },
+  {
+    id: 'prob-2',
+    file: 'genesis.bara',
+    line: 12,
+    col: 1,
+    location: 'genesis.bara:12:1',
+    message: 'ContratoA no resuelto en alcance',
+    severity: 'error'
+  },
+  {
+    id: 'prob-3',
+    file: 'HELLO.bara',
+    line: 2,
+    col: 3,
+    location: 'HELLO.bara:2:3',
+    message: 'Variable x sin anotación de tipo',
+    severity: 'error'
+  }
+];
+
+export function computeProblemsSummary(problemsList) {
+  const list = Array.isArray(problemsList) ? problemsList : [];
+  const total = list.length;
+  const warnings = list.filter(p => p.severity === 'aviso').length;
+  const errors = list.filter(p => p.severity === 'error').length;
+  return {
+    total,
+    warnings,
+    errors,
+    statusText: `${total} ${total === 1 ? 'problema' : 'problemas'} · ⚠ ${warnings} ${warnings === 1 ? 'aviso' : 'avisos'} · ✖ ${errors} ${errors === 1 ? 'error' : 'errores'}`,
+    badgeText: `⚠ ${total}`
+  };
+}
 
 const VOWELS = new Set(['a', 'e', 'i', 'o', 'u', 'á', 'é', 'í', 'ó', 'ú']);
 
@@ -100,7 +148,7 @@ export function detectUnclosedStringInLine(lineText) {
     if (ch === '"' && prev !== '\\') {
       if (!inString) {
         inString = true;
-        startCol = i + 1; // 1-indexed column
+        startCol = i + 1;
       } else {
         inString = false;
         startCol = -1;
@@ -169,13 +217,14 @@ export const BARA_DIAGNOSTICS = [
 
 /**
  * Computes whether the "Aceptar" button on a proposed change must be disabled.
- * When strictMode is ON and the change is NOT verified, Aceptar is blocked.
+ * When strictMode is ON and the change is NOT verified, Aceptar is blocked
+ * with the exact message «Modo estricto: verifica antes de aceptar».
  */
 export function computeAcceptButtonState({ patchVerified, strictMode }) {
   if (!patchVerified && strictMode) {
     return {
       disabled: true,
-      explanation: 'Bloquea Aceptar en cambios no verificados (Modo estricto activo)'
+      explanation: 'Modo estricto: verifica antes de aceptar'
     };
   }
   return {

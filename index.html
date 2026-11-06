@@ -8,26 +8,82 @@
   <meta property="og:title" content="Bara IDE"/>
   <meta property="og:description" content="Mock visual de Bara IDE."/>
   <link rel="stylesheet" href="/bara.css"/>
+  <style>
+    #demo-switcher {
+      position: fixed;
+      bottom: 34px;
+      right: 14px;
+      z-index: 9999;
+      font-family: var(--font);
+      display: none;
+    }
+    #demo-switcher.visible {
+      display: block;
+    }
+    #demo-switcher-btn {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    }
+    #demo-switcher-btn:hover {
+      color: var(--green-soft);
+      border-color: var(--green-soft);
+    }
+    #demo-menu {
+      position: absolute;
+      bottom: 34px;
+      right: 0;
+      background: #101419;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 260px;
+      max-height: 440px;
+      overflow-y: auto;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.8);
+      display: none;
+      flex-direction: column;
+    }
+    #demo-menu.open {
+      display: flex;
+    }
+    .demo-option {
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      border-bottom: 1px solid rgba(30, 42, 56, 0.4);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .demo-option:hover {
+      background: var(--hover);
+      color: var(--green-soft);
+    }
+    .demo-option.selected {
+      color: var(--green-soft);
+      font-weight: 600;
+      background: rgba(106, 169, 111, 0.08);
+    }
+  </style>
 </head>
 <body>
 <div class="shell" id="app-shell">
-  <!-- Frameless Window Titlebar (Bara IDE v0.5.0): ⇄ layout swap + ▬ □ × window controls -->
-  <header class="titlebar" role="banner" aria-label="Barra de título de Bara IDE">
+  <!-- AÑADIDO 1 y 2: Barra de título con botón ⇄ (Ctrl+Alt+E) y controles de ventana ▬ □ × -->
+  <header class="titlebar" role="banner" aria-label="Barra de título">
     <div class="titlebar-left">
       <span class="titlebar-brand">Bara IDE</span>
-      <span class="titlebar-sep">·</span>
-      <span class="mono titlebar-file" id="titlebar-file-label">samples/genesis.bara</span>
-      <!-- Hidden AETHER-Ω header preserved behind showAdvanced=false -->
-      <span id="adv-aether-header" class="chip" hidden data-advanced="aether-header">AETHER-Ω Symbolic Engine</span>
     </div>
     <div class="titlebar-right">
-      <button type="button" id="btn-toggle-demo-bar" class="titlebar-action-btn" aria-label="Mostrar barra de estados Demo (/demo)" title="Mostrar/Ocultar controles de estados (/demo)">
-        <span>Demo</span>
-      </button>
-      <button type="button" id="btn-swap-layout" class="titlebar-action-btn" aria-label="Alternar posición de editor y chat (Ctrl+Alt+E)" title="Alternar editor a la izquierda / derecha (Ctrl+Alt+E)">
-        <span aria-hidden="true">⇄</span>
-        <span id="swap-layout-label">Editor ⇄ Chat</span>
-      </button>
+      <button type="button" id="btn-swap-layout" class="titlebar-btn" aria-label="Alternar editor de lado (Ctrl+Alt+E)" title="Alternar editor de lado (Ctrl+Alt+E)">⇄</button>
       <div class="window-controls" role="group" aria-label="Controles de ventana">
         <button type="button" id="win-btn-min" class="win-ctrl-btn" aria-label="Minimizar ventana" title="Minimizar">▬</button>
         <button type="button" id="win-btn-max" class="win-ctrl-btn" aria-label="Maximizar ventana" title="Maximizar">□</button>
@@ -36,28 +92,15 @@
     </div>
   </header>
 
-  <!-- Interactive /demo State Trigger Bar (visible on /demo route or when toggled) -->
-  <nav id="demo-state-bar" class="demo-state-bar" aria-label="Disparadores de estado Demo" hidden>
-    <span class="demo-bar-title mono">/demo:</span>
-    <button type="button" class="demo-trigger-btn" data-demo-action="layout-normal">Layout normal</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="layout-invertido">Layout invertido (⇄)</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="menu-mas-abierto">Menú » abierto</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="aviso-rojo">Aviso rojo</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="verificado">Verificado</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="banner-error">Banner de error</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="diagnosticos">Diagnósticos</button>
-    <button type="button" class="demo-trigger-btn" data-demo-action="modo-estricto">Modo estricto</button>
-  </nav>
-
-  <!-- Global Dismissible Red Error Banner (Point 5) -->
-  <div id="github-url-error-banner" class="banner banner-error" role="status" aria-live="polite" hidden>
-    <span class="banner-error-text">Sólo se aceptan URL https o ssh de github.com</span>
-    <button type="button" id="btn-close-error-banner" class="icon-close-btn" aria-label="Cerrar banner de error" title="Cerrar banner (×)">×</button>
+  <!-- AÑADIDO 5: Banner de error descartable con × (oculto por defecto para no alterar las pantallas) -->
+  <div id="github-url-error-banner" class="banner banner-error" role="status" hidden>
+    <span>Sólo se aceptan URL https o ssh de github.com</span>
+    <button type="button" id="btn-close-error-banner" class="icon-close-btn" aria-label="Cerrar banner de error" title="Cerrar (×)">×</button>
   </div>
 
   <div class="shell-body">
-    <!-- Canonical Universal Rail (6 visible items + hidden Kernel/AETHER behind showAdvanced=false) -->
-    <aside class="rail" aria-label="Navegación principal">
+    <!-- Canonical Universal Rail (Idéntico a VISUAL-4: Archivos, Buscar, Chat, Registros, Herramientas, Ajustes) -->
+    <aside class="rail">
       <nav>
         <a class="active" href="#" data-rail="Archivos" data-screen="01" title="Archivos (Ctrl+O)">
           <svg width="22" height="22" viewBox="0 0 24 24"><path d="M3 7V19C3 20.1 3.9 21 5 21H19C20.1 21 21 20.1 21 19V9C21 7.9 20.1 7 19 7H12L10 4H5C3.9 4 3 4.9 3 6V7Z"/></svg>
@@ -67,7 +110,7 @@
           <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21L16.65 16.65"/></svg>
           <span>Buscar</span>
         </a>
-        <a class="" href="#" data-rail="Chat" data-screen="03" title="Chat y Editor">
+        <a class="" href="#" data-rail="Chat" data-screen="03" title="Chat asistente">
           <svg width="22" height="22" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
           <span>Chat</span>
         </a>
@@ -79,18 +122,11 @@
           <svg width="22" height="22" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           <span>Herramientas</span>
         </a>
-        <a class="" href="#" data-rail="Ajustes" data-screen="13" title="Ajustes (Ctrl+,)">
-          <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <a class="" href="#" data-rail="Ajustes" data-screen="13" title="Ajustes de IA">
+          <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Ajustes</span>
         </a>
-        <!-- Hidden Kernel rail item preserved behind showAdvanced=false -->
-        <a id="adv-rail-kernel" href="#" data-rail="Kernel" data-advanced="kernel-rail" hidden title="Kernel (Oculto)">
-          <svg width="22" height="22" viewBox="0 0 24 24"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/></svg>
-          <span>Kernel</span>
-        </a>
       </nav>
-      <!-- Hidden AETHER footer preserved behind showAdvanced=false -->
-      <div id="adv-rail-aether-footer" data-advanced="aether-footer" hidden style="margin-top:auto;padding:8px;text-align:center;font-size:12px;color:var(--muted)">AETHER</div>
     </aside>
 
     <!-- Main Dynamic Screen Content Area -->
@@ -99,37 +135,36 @@
     </div>
   </div>
 
-  <!-- Hidden Advanced Components Structure (Belnap, AETHER, Kernel internals preserved in DOM behind showAdvanced=false) -->
-  <section id="adv-hidden-components" data-show-advanced="false" hidden aria-hidden="true">
-    <div id="adv-comp-belnap" data-component="BelnapBilattice">
-      <h2>Belnap Bilattice (⊤, ⊥, Ambos, Ninguno)</h2>
-      <p>Verificador tetravalente mantenido en estructura para el IDE real.</p>
-    </div>
-    <div id="adv-comp-aether" data-component="AetherSymbolicHero">
-      <h2>AETHER-Ω Motor Simbólico</h2>
-    </div>
-    <div id="adv-comp-kernel-internals" data-component="KernelInternals">
-      <h2>Internos del Kernel · Shoresh AST · Ledger</h2>
-    </div>
-  </section>
-
-  <!-- Canonical Status Bar (Point 3 & Point 6): listo | samples/genesis.bara | ⚠ 3 | kernel activo | v0.5.0 -->
-  <footer class="status" role="contentinfo">
-    <span class="status-left">
-      <span class="ok" aria-hidden="true">●</span>
-      <span id="status-state-text">listo</span>
-    </span>
+  <!-- Canonical Status Bar: conserva TODO lo de VISUAL-4 + contadores coherentes + «kernel activo» y «v0.5.0» -->
+  <footer class="status">
+    <span class="ok">●</span>
+    <span>main</span>
     <span class="sep">|</span>
-    <span class="mono" id="status-file-name">samples/genesis.bara</span>
+    <span id="status-problemas-trigger" role="button" tabindex="0" style="cursor: pointer;" title="Mostrar/Ocultar panel Problemas (Ctrl+J)">3 problemas · ⚠ 1 aviso · ✖ 2 errores</span>
     <span class="sep">|</span>
-    <button type="button" id="status-problemas-trigger" class="status-diag-trigger" aria-label="Diagnósticos: 3 problemas (Ctrl+J)" title="Mostrar/Ocultar panel Problemas (Ctrl+J)">
-      <span aria-hidden="true">⚠</span> <span id="status-diag-number">3</span>
-    </button>
-    <div class="status-right">
-      <span class="status-pill-green" id="status-kernel-pill">kernel activo</span>
+    <span id="status-diag-counter" role="button" tabindex="0" style="cursor: pointer; color: var(--warn);" title="Diagnósticos en el editor (Ctrl+J)">⚠ 3</span>
+    <span class="sep">|</span>
+    <span class="mono">kernel fa3d308</span>
+    <span class="sep">|</span>
+    <span>DeepSeek · deepseek-chat</span>
+    <span style="margin-left:auto; display:inline-flex; align-items:center; gap:10px;">
+      <span class="status-pill-green">kernel activo</span>
       <span class="mono" id="status-version-tag">v0.5.0</span>
-    </div>
+    </span>
   </footer>
+</div>
+
+<!-- Componentes avanzados ocultos (showAdvanced = false): Belnap/Bilattice, AETHER, internos del kernel -->
+<div id="hidden-advanced-modules" hidden aria-hidden="true"></div>
+
+<!-- Discreet Demo Switcher (idéntico a VISUAL-4) -->
+<div id="demo-switcher">
+  <button id="demo-switcher-btn" title="Selector de pantalla (15 referencias)">
+    <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green-soft);"></span>
+    <span id="demo-active-label">01 · Bienvenida</span>
+    <span style="font-size:10px;opacity:0.7;">▼</span>
+  </button>
+  <div id="demo-menu"></div>
 </div>
 
 <script type="module" src="/bara.js"></script>
